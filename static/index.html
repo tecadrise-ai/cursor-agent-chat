@@ -1,0 +1,1801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AgentChat (cursor via CLI)</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --gray-50: #f9fafb;
+      --gray-100: #f3f4f6;
+      --gray-200: #e5e7eb;
+      --gray-300: #d1d5db;
+      --gray-500: #6b7280;
+      --gray-700: #374151;
+      --gray-900: #111827;
+      --brand-50: #fff7ed;
+      --brand-100: #ffedd5;
+      --brand-500: #f97316;
+      --brand-600: #ea580c;
+      --brand-border: #fdba74;
+      --white: #ffffff;
+      --danger: #ef4444;
+      --danger-bg: #fef2f2;
+      --user-bubble: #fff7ed;
+      --agent-bubble: #ebebeb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Inter", system-ui, sans-serif;
+      background: var(--gray-100);
+      color: var(--gray-900);
+      min-height: 100vh;
+    }
+    .backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: var(--white);
+      padding: 0;
+    }
+    .modal {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      min-height: 100dvh;
+      background: var(--white);
+      border: none;
+      border-radius: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: none;
+    }
+    .modal-body {
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .chat-pane {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      border-right: 1px solid var(--gray-200);
+    }
+    .config-pane {
+      width: min(380px, 38vw);
+      min-width: 280px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      background: var(--gray-50);
+      overflow: hidden;
+    }
+    .config-pane .toolbar-heading {
+      padding: 10px 14px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--gray-700);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid var(--gray-200);
+      background: var(--white);
+      flex-shrink: 0;
+    }
+    .modal-head {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--gray-200);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: linear-gradient(to bottom, var(--gray-50), var(--white));
+      flex-shrink: 0;
+    }
+    .modal-head-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .app-logo-mark {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      overflow: hidden;
+      flex-shrink: 0;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    }
+    .app-logo-mark img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+    .modal-head-titles {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .modal-head h1 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--gray-900);
+    }
+    .modal-head h1 span { color: var(--brand-600); }
+    .modal-head-byline {
+      margin: 0;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--gray-600);
+    }
+    .modal-head-byline a {
+      color: var(--brand-600);
+      text-decoration: none;
+    }
+    .modal-head-byline a:hover {
+      text-decoration: underline;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    button {
+      background: var(--brand-600);
+      color: #fff;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    button:hover:not(:disabled) { background: var(--brand-500); }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    button.secondary {
+      background: var(--white);
+      border: 1px solid var(--gray-200);
+      color: var(--gray-700);
+      box-shadow: none;
+    }
+    button.secondary:hover:not(:disabled) {
+      background: var(--gray-50);
+      border-color: var(--gray-300);
+    }
+    button.tab-close {
+      padding: 0 6px;
+      min-width: 0;
+      font-size: 1rem;
+      line-height: 1;
+      background: transparent;
+      border: none;
+      color: var(--gray-500);
+      box-shadow: none;
+    }
+    button.tab-close:hover:not(:disabled) {
+      color: var(--danger);
+      background: var(--danger-bg);
+    }
+    .tab-bar {
+      display: flex;
+      align-items: flex-end;
+      flex-wrap: nowrap;
+      gap: 4px;
+      padding: 8px 12px 0;
+      border-bottom: 1px solid var(--gray-200);
+      background: var(--gray-50);
+      flex-shrink: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    .tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid var(--gray-200);
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+      background: var(--gray-100);
+      color: var(--gray-700);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      max-width: 180px;
+    }
+    .tab:hover { background: var(--gray-50); }
+    .tab.active {
+      background: var(--white);
+      color: var(--brand-600);
+      border-color: var(--gray-200);
+      position: relative;
+      margin-bottom: -1px;
+      padding-bottom: 9px;
+      box-shadow: 0 -2px 0 var(--brand-600) inset;
+    }
+    .tab-title { overflow: hidden; text-overflow: ellipsis; }
+    .toolbar {
+      padding: 12px 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    label {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--gray-700);
+      display: block;
+      margin-bottom: 4px;
+    }
+    label code { font-size: 0.7rem; color: var(--gray-500); }
+    input[type="text"], textarea {
+      width: 100%;
+      background: var(--gray-50);
+      border: 1px solid var(--gray-200);
+      color: var(--gray-900);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.8rem;
+    }
+    input[type="text"]:focus, textarea:focus {
+      outline: none;
+      border-color: var(--brand-500);
+      box-shadow: 0 0 0 1px var(--brand-500);
+    }
+    .config-pane input[type="text"] {
+      background: var(--white);
+    }
+    .config-pane textarea {
+      resize: vertical;
+      min-height: 72px;
+      max-height: 220px;
+      background: var(--white);
+    }
+    .preview {
+      font-size: 0.72rem;
+      color: var(--gray-500);
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 140px;
+      overflow-y: auto;
+      padding: 8px 10px;
+      background: var(--white);
+      border-radius: 6px;
+      border: 1px dashed var(--gray-300);
+    }
+    .preview-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 6px;
+      margin-top: 20px;
+    }
+    button.icon-btn {
+      padding: 8px;
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+    }
+    button.icon-btn svg {
+      display: block;
+    }
+    .preview-actions .icon-btn.preview-icon-accent {
+      color: var(--brand-600);
+      border-color: var(--brand-border);
+    }
+    .preview-actions .icon-btn.preview-icon-accent:hover:not(:disabled) {
+      background: var(--brand-50);
+      border-color: var(--brand-500);
+      color: var(--brand-600);
+    }
+    .preview-actions .icon-btn.preview-icon-danger {
+      color: var(--danger);
+      border-color: #fecaca;
+    }
+    .preview-actions .icon-btn.preview-icon-danger:hover:not(:disabled) {
+      background: var(--danger-bg);
+      border-color: #f87171;
+      color: #dc2626;
+    }
+    .chat-id {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.8rem;
+      color: var(--brand-600);
+      font-weight: 600;
+    }
+    .chat-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .messages {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+      background: var(--gray-50);
+    }
+    .bubble {
+      max-width: 92%;
+      padding: 0;
+      border-radius: 10px;
+      font-size: 0.875rem;
+      line-height: 1.45;
+      border: 1px solid var(--gray-200);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .bubble .bubble-text {
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .bubble.agent {
+      display: block;
+      overflow: visible;
+      background: var(--agent-bubble);
+    }
+    .bubble.agent .bubble-text {
+      padding: 12px 14px 16px;
+      line-height: 1.5;
+    }
+    .bubble.user {
+      position: relative;
+      background: var(--user-bubble);
+      border-color: var(--brand-border);
+    }
+    .bubble.user.bubble-with-ts {
+      overflow: visible;
+      margin-top: 10px;
+    }
+    .bubble.user .bubble-ts {
+      position: absolute;
+      left: 50%;
+      top: 0;
+      transform: translate(-50%, -50%);
+      font-size: 0.6rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      color: var(--gray-600);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+      padding: 0 5px;
+      background: #ffe8cc;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .bubble.user.err .bubble-ts {
+      background: #ffe8cc;
+    }
+    .bubble.err {
+      border-color: #fecaca;
+      background: var(--danger-bg);
+      color: #b91c1c;
+    }
+    .composer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--gray-200);
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      background: var(--white);
+      flex-shrink: 0;
+    }
+    .composer textarea {
+      flex: 1;
+      min-height: 44px;
+      max-height: 160px;
+      background: var(--white);
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      color: var(--gray-500);
+      padding: 6px 16px;
+      background: var(--gray-50);
+      flex-shrink: 0;
+      border-top: 1px solid var(--gray-200);
+      min-height: 2rem;
+    }
+    .status-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--gray-300);
+      border-top-color: var(--brand-600);
+      border-radius: 50%;
+      animation: status-spin 0.65s linear infinite;
+      flex-shrink: 0;
+    }
+    .status-spinner[hidden] {
+      display: none !important;
+    }
+    @keyframes status-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    .name-session-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      background: rgba(17, 24, 39, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .name-session-overlay[hidden] {
+      display: none !important;
+    }
+    .agents-md-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 20;
+      background: rgba(17, 24, 39, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+    }
+    .agents-md-overlay[hidden] {
+      display: none !important;
+    }
+    .agents-md-dialog {
+      background: var(--white);
+      border: 1px solid var(--gray-200);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: min(1200px, calc(100vw - 16px));
+      width: min(1200px, calc(100vw - 16px));
+      max-height: calc(100dvh - 16px);
+      min-height: min(88dvh, calc(100dvh - 48px));
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+    }
+    .agents-md-dialog h3 {
+      margin: 0;
+      font-size: 1rem;
+      color: var(--gray-900);
+    }
+    .agents-md-dialog .agents-md-hint {
+      margin: 0;
+      font-size: 0.8125rem;
+      color: var(--gray-500);
+    }
+    .agents-md-dialog textarea {
+      flex: 1;
+      min-height: min(68dvh, 720px);
+      resize: vertical;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.875rem;
+      line-height: 1.45;
+    }
+    .name-session-dialog {
+      background: var(--white);
+      border: 1px solid var(--gray-200);
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+    }
+    .name-session-dialog h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+      color: var(--gray-900);
+    }
+    .name-session-dialog p {
+      margin: 0 0 12px;
+      font-size: 0.8125rem;
+      color: var(--gray-500);
+    }
+    .name-session-dialog input[type="text"] {
+      margin-bottom: 14px;
+      font-family: inherit;
+    }
+    .name-session-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .sched-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-right: auto;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .sched-next-run {
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--gray-500);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.25;
+      max-width: 140px;
+    }
+    .sched-toggle-host {
+      position: relative;
+      width: 2.5rem;
+      height: 1.25rem;
+      flex-shrink: 0;
+    }
+    .sched-toggle-input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      cursor: pointer;
+      z-index: 2;
+    }
+    .sched-toggle-input:focus-visible + .sched-toggle-label {
+      outline: 2px solid var(--brand-500);
+      outline-offset: 2px;
+    }
+    .sched-toggle-label {
+      display: block;
+      width: 2.5rem;
+      height: 1.25rem;
+      background-color: #ef4444;
+      border-radius: 9999px;
+      position: relative;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+    .sched-toggle-label::after {
+      content: "";
+      position: absolute;
+      top: 0.125rem;
+      left: 0.125rem;
+      width: 1rem;
+      height: 1rem;
+      background-color: white;
+      border-radius: 50%;
+      transition: transform 0.3s ease;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    .sched-toggle-input:checked + .sched-toggle-label {
+      background-color: #84cc16;
+    }
+    .sched-toggle-input:checked + .sched-toggle-label::after {
+      transform: translateX(1.25rem);
+    }
+    .scheduler-cli-block {
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--gray-200);
+    }
+    .scheduler-cli-hint {
+      margin: 0 0 8px;
+      font-size: 0.7rem;
+      color: var(--gray-500);
+      line-height: 1.35;
+    }
+    .scheduler-cli-block textarea {
+      min-height: 64px;
+      max-height: 160px;
+    }
+    .schedule-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 25;
+      background: rgba(17, 24, 39, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+    }
+    .schedule-overlay[hidden] {
+      display: none !important;
+    }
+    .schedule-dialog {
+      background: var(--white);
+      border: 1px solid var(--gray-200);
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 440px;
+      width: 100%;
+      max-height: calc(100dvh - 24px);
+      overflow-y: auto;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+    }
+    .schedule-dialog h3 {
+      margin: 0 0 14px;
+      font-size: 1rem;
+      color: var(--gray-900);
+    }
+    .schedule-dialog label.block {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--gray-700);
+      margin-bottom: 6px;
+    }
+    .schedule-dialog select,
+    .schedule-dialog input[type="text"],
+    .schedule-dialog input[type="number"],
+    .schedule-dialog input[type="time"],
+    .schedule-dialog input[type="datetime-local"] {
+      width: 100%;
+      font-family: inherit;
+      font-size: 0.8125rem;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--gray-300);
+      background: var(--white);
+      box-sizing: border-box;
+    }
+    .schedule-dialog .chat-schedule-ui {
+      margin-bottom: 10px;
+      margin-top: 10px;
+    }
+    .schedule-dialog .schedule-ui-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .schedule-dialog .chat-schedule-ui.hidden {
+      display: none !important;
+    }
+    .schedule-dialog .cron-hint {
+      font-size: 0.65rem;
+      color: var(--gray-500);
+      margin: 4px 0 0;
+    }
+    .schedule-dialog-footer {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--gray-200);
+    }
+  </style>
+</head>
+<body>
+  <div class="backdrop" id="backdrop">
+    <div class="modal" role="dialog" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <div class="modal-head-brand">
+          <div class="app-logo-mark" aria-hidden="true">
+            <img src="/static/favicon.svg" width="40" height="40" alt="" />
+          </div>
+          <div class="modal-head-titles">
+            <h1 id="modalTitle">Agent<span>Chat</span> (cursor via CLI)</h1>
+            <p class="modal-head-byline">
+              By:
+              <a href="https://TecAdRise.ai" target="_blank" rel="noopener noreferrer">https://TecAdRise.ai</a>
+            </p>
+          </div>
+        </div>
+        <div class="row">
+          <button type="button" id="btnNewChat">+ New chat</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="chat-pane">
+          <div class="tab-bar" id="tabBar" aria-label="Chat sessions"></div>
+          <div class="chat-main">
+            <div class="messages" id="messages" aria-live="polite"></div>
+            <div class="status" aria-live="polite">
+              <span class="status-spinner" id="statusSpinner" hidden></span>
+              <span id="status"></span>
+            </div>
+            <div class="composer">
+              <textarea id="input" placeholder="Message to agent…" rows="2"></textarea>
+              <button type="button" id="btnSend">Send</button>
+            </div>
+          </div>
+        </div>
+        <aside class="config-pane" aria-label="CLI and session settings">
+          <div class="toolbar-heading">Session and CLI</div>
+          <div class="toolbar">
+            <div>
+              <label>Current chat_id</label>
+              <div class="row" style="width:100%;">
+                <span class="chat-id" id="chatIdDisplay" style="flex:1;min-width:0;word-break:break-all;">(none — + New chat in this tab)</span>
+                <button type="button" class="secondary" id="btnCopyId" disabled>Copy id</button>
+              </div>
+            </div>
+            <div>
+              <label for="cliPrefix">CLI prefix:</label>
+              <textarea id="cliPrefix" spellcheck="false"></textarea>
+            </div>
+            <div>
+              <div class="scheduler-cli-block">
+                <label for="schedulerPrompt">CLI scheduler:</label>
+                <p class="scheduler-cli-hint">When the scheduler runs, this text is sent as the user message (replaces human input for that run).</p>
+                <textarea id="schedulerPrompt" spellcheck="true" placeholder="Prompt for scheduled runs…" disabled></textarea>
+              </div>
+              <label>Command preview:</label>
+              <div class="preview" id="cmdPreview" role="status" aria-live="polite"></div>
+              <div class="preview-actions">
+                <div class="sched-controls">
+                  <div class="sched-toggle-host" title="Scheduler on / off for this tab">
+                    <input type="checkbox" id="schedEnabledToggle" class="sched-toggle-input" disabled aria-label="Enable scheduler for this chat tab" />
+                    <label for="schedEnabledToggle" class="sched-toggle-label"></label>
+                  </div>
+                  <button type="button" class="secondary icon-btn preview-icon-accent" id="btnSchedule" disabled aria-label="Edit schedule" title="Edit schedule">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect width="18" height="18" x="3" y="4" rx="2" ry="2"/>
+                      <line x1="16" x2="16" y1="2" y2="6"/>
+                      <line x1="8" x2="8" y1="2" y2="6"/>
+                      <line x1="3" x2="21" y1="10" y2="10"/>
+                    </svg>
+                  </button>
+                  <span class="sched-next-run" id="schedNextRunDisplay" hidden></span>
+                </div>
+                <button type="button" class="secondary icon-btn preview-icon-accent" id="btnAgentsMd" disabled aria-label="Edit AGENTS.md" title="AGENTS.md in this chat folder">
+                  <img src="/static/favicon.svg" width="22" height="22" alt="" />
+                </button>
+                <button type="button" class="secondary icon-btn preview-icon-accent" id="btnOpenWorkspace" disabled aria-label="Open workspace folder in file manager" title="Open session folder in Explorer">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+                  </svg>
+                </button>
+                <button type="button" class="secondary icon-btn preview-icon-danger" id="btnDeleteSession" disabled aria-label="Delete this session" title="Delete session and workspace folder">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 6h18"/>
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                    <line x1="10" x2="10" y1="11" y2="17"/>
+                    <line x1="14" x2="14" y1="11" y2="17"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+    <div class="name-session-overlay" id="nameSessionOverlay" hidden>
+      <div class="name-session-dialog" role="dialog" aria-labelledby="nameSessionTitle" aria-modal="true">
+        <h3 id="nameSessionTitle">Name this session</h3>
+        <p>Creates folder <code>chats/&lt;slug&gt;</code> and uses it as <code>--workspace</code>.</p>
+        <input type="text" id="nameSessionInput" autocomplete="off" />
+        <div class="name-session-actions">
+          <button type="button" class="secondary" id="nameSessionCancel">Cancel</button>
+          <button type="button" id="nameSessionOk">Create session</button>
+        </div>
+      </div>
+    </div>
+    <div class="agents-md-overlay" id="agentsMdOverlay" hidden>
+      <div class="agents-md-dialog" role="dialog" aria-labelledby="agentsMdTitle" aria-modal="true">
+        <h3 id="agentsMdTitle">AGENTS.md</h3>
+        <p class="agents-md-hint">File in this session folder (<code>chats/&lt;slug&gt;/AGENTS.md</code>). When this file exists, the CLI adds the arguments <code>read instructions from AGENTS.md</code> before your chat message so the agent can open the file from the workspace.</p>
+        <textarea id="agentsMdEditor" spellcheck="true" aria-label="AGENTS.md content"></textarea>
+        <div class="name-session-actions">
+          <button type="button" class="secondary" id="agentsMdCancel">Cancel</button>
+          <button type="button" id="agentsMdSave">Save</button>
+        </div>
+      </div>
+    </div>
+    <div class="schedule-overlay" id="scheduleOverlay" hidden>
+      <div class="schedule-dialog" role="dialog" aria-labelledby="scheduleDialogTitle" aria-modal="true">
+        <h3 id="scheduleDialogTitle">Edit schedule</h3>
+        <div>
+          <label class="block" for="chat-schedule-type">Schedule type</label>
+          <select id="chat-schedule-type">
+            <option value="interval">Interval (every X time)</option>
+            <option value="daily">Daily (specific time)</option>
+            <option value="weekly">Weekly (day and time)</option>
+            <option value="once">Once (date and time)</option>
+            <option value="cron">Custom cron</option>
+          </select>
+        </div>
+        <div id="chat-ui-interval" class="chat-schedule-ui schedule-ui-grid">
+          <div>
+            <label class="block" for="chat-interval-val">Every</label>
+            <input type="number" id="chat-interval-val" min="1" value="15" />
+          </div>
+          <div>
+            <label class="block" for="chat-interval-unit">Unit</label>
+            <select id="chat-interval-unit">
+              <option value="m" selected>Minutes</option>
+              <option value="h">Hours</option>
+              <option value="d">Days</option>
+            </select>
+          </div>
+        </div>
+        <div id="chat-ui-daily" class="chat-schedule-ui hidden">
+          <label class="block" for="chat-daily-time">Time</label>
+          <input type="time" id="chat-daily-time" value="08:30" />
+        </div>
+        <div id="chat-ui-weekly" class="chat-schedule-ui schedule-ui-grid hidden">
+          <div>
+            <label class="block" for="chat-weekly-day">Day of week</label>
+            <select id="chat-weekly-day">
+              <option value="1">Monday</option>
+              <option value="2">Tuesday</option>
+              <option value="3">Wednesday</option>
+              <option value="4">Thursday</option>
+              <option value="5">Friday</option>
+              <option value="6">Saturday</option>
+              <option value="0">Sunday</option>
+            </select>
+          </div>
+          <div>
+            <label class="block" for="chat-weekly-time">Time</label>
+            <input type="time" id="chat-weekly-time" value="09:00" />
+          </div>
+        </div>
+        <div id="chat-ui-once" class="chat-schedule-ui hidden">
+          <label class="block" for="chat-once-datetime">Date and time</label>
+          <input type="datetime-local" id="chat-once-datetime" />
+        </div>
+        <div id="chat-ui-cron" class="chat-schedule-ui hidden">
+          <label class="block" for="chat-cron-expr">Cron expression</label>
+          <input type="text" id="chat-cron-expr" placeholder="* * * * *" autocomplete="off" />
+          <p class="cron-hint">Format: minute hour day month day-of-week</p>
+        </div>
+        <div class="schedule-dialog-footer">
+          <button type="button" class="secondary" id="scheduleCancel">Cancel</button>
+          <button type="button" id="scheduleSave">Save schedule</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = "";
+    const DEFAULT_PREFIX = "agent -p --trust --yolo --approve-mcps --model auto";
+
+    const el = (id) => document.getElementById(id);
+    const backdrop = el("backdrop");
+    const messagesEl = el("messages");
+    const status = el("status");
+    const tabBar = el("tabBar");
+
+    const state = { activeTabId: "", tabs: [] };
+
+    let previewDebounce = null;
+    let previewGen = 0;
+    let schedulerPollTimer = null;
+    let manualSendBusy = false;
+
+    function quoteCmdFragment(s) {
+      return '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+    }
+
+    function scheduleRefreshCmdPreview() {
+      if (previewDebounce) clearTimeout(previewDebounce);
+      previewDebounce = setTimeout(() => {
+        previewDebounce = null;
+        void refreshCmdPreview();
+      }, 200);
+    }
+
+    function cancelScheduledCmdPreview() {
+      if (previewDebounce) {
+        clearTimeout(previewDebounce);
+        previewDebounce = null;
+      }
+      previewGen++;
+    }
+
+    async function refreshCmdPreview() {
+      const gen = ++previewGen;
+      const tab = ensureActiveTab();
+      const prefix = el("cliPrefix").value.trim() || DEFAULT_PREFIX;
+      const msgRaw = el("input").value.trim();
+      const tail = msgRaw ? quoteCmdFragment(msgRaw) : "<message>";
+
+      if (!tab.slug || !tab.chatId) {
+        el("cmdPreview").textContent =
+          prefix + " --resume \u2014 --workspace \u2014 " + tail;
+        tab.cmdPreview = el("cmdPreview").textContent;
+        return;
+      }
+
+      try {
+        const data = await apiPost("/api/preview-cmd", {
+          cli_prefix: prefix,
+          chat_id: tab.chatId,
+          slug: tab.slug,
+          message: msgRaw,
+        });
+        if (gen !== previewGen) return;
+        const line = data.preview_cmd || "\u2014";
+        el("cmdPreview").textContent = line;
+        tab.cmdPreview = line;
+      } catch (e) {
+        if (gen !== previewGen) return;
+        el("cmdPreview").textContent = "Could not build preview: " + e.message;
+        tab.cmdPreview = el("cmdPreview").textContent;
+      }
+    }
+
+    function closeAgentsMdOverlay() {
+      const ov = el("agentsMdOverlay");
+      if (ov.hidden) return;
+      ov.hidden = true;
+      document.removeEventListener("keydown", agentsMdOnEscape);
+    }
+
+    function agentsMdOnEscape(ev) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        closeAgentsMdOverlay();
+      }
+    }
+
+    async function openAgentsMdOverlay() {
+      closeAgentsMdOverlay();
+      const tab = ensureActiveTab();
+      if (!tab.slug) return;
+      try {
+        const data = await apiGet(
+          "/api/agents-md?slug=" + encodeURIComponent(tab.slug),
+        );
+        el("agentsMdEditor").value =
+          data.content != null ? String(data.content) : "";
+      } catch (e) {
+        status.textContent = "Could not load AGENTS.md: " + e.message;
+        return;
+      }
+      el("agentsMdOverlay").hidden = false;
+      document.addEventListener("keydown", agentsMdOnEscape);
+      requestAnimationFrame(() => el("agentsMdEditor").focus());
+    }
+
+    async function saveAgentsMd() {
+      const tab = ensureActiveTab();
+      if (!tab.slug) return;
+      try {
+        await apiPost("/api/agents-md", {
+          slug: tab.slug,
+          content: el("agentsMdEditor").value,
+        });
+        closeAgentsMdOverlay();
+        status.textContent = "Saved AGENTS.md.";
+        setTimeout(() => {
+          if (status.textContent === "Saved AGENTS.md.") status.textContent = "";
+        }, 2500);
+      } catch (e) {
+        status.textContent = "Save failed: " + e.message;
+      }
+    }
+
+    function uid() {
+      return "draft_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    }
+
+    function emptyTab(title, inherit) {
+      return {
+        id: uid(),
+        slug: null,
+        title: title || "Chat",
+        chatId: "",
+        cliPrefix: inherit && inherit.cliPrefix ? inherit.cliPrefix : DEFAULT_PREFIX,
+        cmdPreview: "\u2014",
+        messages: [],
+        schedulerEnabled: false,
+        schedule: "interval:15m",
+        schedulerPrompt: "",
+        schedulerNextRunDisplay: null,
+        schedulerAgentBusy: false,
+      };
+    }
+
+    function normalizeTab(t) {
+      return {
+        id: t.id || uid(),
+        slug: t.slug || null,
+        title: t.title || "Chat",
+        chatId: t.chatId || "",
+        cliPrefix: t.cliPrefix || DEFAULT_PREFIX,
+        cmdPreview: t.cmdPreview != null && t.cmdPreview !== "" ? t.cmdPreview : "\u2014",
+        messages: Array.isArray(t.messages) ? t.messages : [],
+        schedulerEnabled: !!t.schedulerEnabled,
+        schedule: t.schedule && String(t.schedule).trim() ? String(t.schedule).trim() : "interval:15m",
+        schedulerPrompt: t.schedulerPrompt != null ? String(t.schedulerPrompt) : "",
+        schedulerNextRunDisplay:
+          t.schedulerNextRunDisplay != null && String(t.schedulerNextRunDisplay).trim() !== ""
+            ? String(t.schedulerNextRunDisplay).trim()
+            : null,
+        schedulerAgentBusy: !!t.schedulerAgentBusy,
+      };
+    }
+
+    function formatScheduleDisplay(schedule) {
+      if (!schedule) return "-";
+      const s = String(schedule);
+      if (s.startsWith("interval:")) {
+        const val = s.replace("interval:", "");
+        const num = val.slice(0, -1);
+        const unit = val.slice(-1);
+        const unitMap = { s: "seconds", m: "minutes", h: "hours", d: "days" };
+        return "Every " + num + " " + (unitMap[unit] || unit);
+      }
+      if (s.startsWith("cron:")) {
+        const cron = s.replace("cron:", "").trim();
+        const parts = cron.split(/\s+/);
+        if (parts.length === 5) {
+          if (parts[2] === "*" && parts[3] === "*" && parts[4] === "*") {
+            return "Daily at " + parts[1].padStart(2, "0") + ":" + parts[0].padStart(2, "0");
+          }
+          if (parts[2] === "*" && parts[3] === "*" && parts[4] !== "*") {
+            const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+            const d = parseInt(parts[4], 10);
+            const dayLabel = days[d] != null ? days[d] : parts[4];
+            return "Weekly (" + dayLabel + ") at " + parts[1].padStart(2, "0") + ":" + parts[0].padStart(2, "0");
+          }
+        }
+        return "Cron: " + cron;
+      }
+      if (s.startsWith("date:")) {
+        return "Once on " + s.replace("date:", "").trim();
+      }
+      return s;
+    }
+
+    function updateChatScheduleUI() {
+      const type = el("chat-schedule-type").value;
+      document.querySelectorAll(".chat-schedule-ui").forEach((u) => {
+        u.classList.add("hidden");
+        u.classList.remove("schedule-ui-grid");
+      });
+      const active = el("chat-ui-" + type);
+      if (!active) return;
+      if (type === "interval" || type === "weekly") {
+        active.classList.remove("hidden");
+        active.classList.add("schedule-ui-grid");
+      } else {
+        active.classList.remove("hidden");
+      }
+    }
+
+    function closeChatScheduleModal() {
+      const ov = el("scheduleOverlay");
+      if (ov.hidden) return;
+      ov.hidden = true;
+      document.removeEventListener("keydown", scheduleOnEscape);
+    }
+
+    function scheduleOnEscape(ev) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        closeChatScheduleModal();
+      }
+    }
+
+    function openChatScheduleModal() {
+      const tab = ensureActiveTab();
+      if (!tab.slug) return;
+      const sched = tab.schedule || "interval:15m";
+      if (sched.startsWith("interval:")) {
+        el("chat-schedule-type").value = "interval";
+        const valStr = sched.replace("interval:", "");
+        const unit = valStr.slice(-1);
+        const valRaw = valStr.slice(0, -1);
+        const valNum = parseInt(valRaw, 10);
+        if (unit === "s") {
+          el("chat-interval-unit").value = "m";
+          el("chat-interval-val").value = String(
+            Math.max(1, Math.round((Number.isFinite(valNum) ? valNum : 60) / 60)),
+          );
+        } else {
+          el("chat-interval-val").value = valRaw || "15";
+          el("chat-interval-unit").value =
+            unit === "m" || unit === "h" || unit === "d" ? unit : "m";
+        }
+      } else if (sched.startsWith("date:")) {
+        el("chat-schedule-type").value = "once";
+        const rawOnce = sched.replace("date:", "").trim().replace(" ", "T");
+        el("chat-once-datetime").value = rawOnce.length >= 16 ? rawOnce.slice(0, 16) : rawOnce;
+      } else if (sched.startsWith("cron:")) {
+        const cron = sched.replace("cron:", "").trim();
+        const parts = cron.split(/\s+/);
+        if (parts.length === 5 && parts[2] === "*" && parts[3] === "*" && parts[4] === "*") {
+          el("chat-schedule-type").value = "daily";
+          el("chat-daily-time").value =
+            parts[1].padStart(2, "0") + ":" + parts[0].padStart(2, "0");
+        } else if (parts.length === 5 && parts[2] === "*" && parts[3] === "*" && parts[4] !== "*") {
+          el("chat-schedule-type").value = "weekly";
+          el("chat-weekly-time").value =
+            parts[1].padStart(2, "0") + ":" + parts[0].padStart(2, "0");
+          el("chat-weekly-day").value = parts[4];
+        } else {
+          el("chat-schedule-type").value = "cron";
+          el("chat-cron-expr").value = cron;
+        }
+      } else {
+        el("chat-schedule-type").value = "interval";
+      }
+      updateChatScheduleUI();
+      el("scheduleOverlay").hidden = false;
+      document.addEventListener("keydown", scheduleOnEscape);
+    }
+
+    async function saveChatSchedule() {
+      const tab = ensureActiveTab();
+      if (!tab.slug) return;
+      const type = el("chat-schedule-type").value;
+      let newSchedule = "";
+      if (type === "interval") {
+        const val = el("chat-interval-val").value;
+        const unit = el("chat-interval-unit").value;
+        newSchedule = "interval:" + val + unit;
+      } else if (type === "daily") {
+        const time = el("chat-daily-time").value;
+        if (!time) {
+          window.alert("Please select a time");
+          return;
+        }
+        const hm = time.split(":");
+        newSchedule = "cron:" + parseInt(hm[1], 10) + " " + parseInt(hm[0], 10) + " * * *";
+      } else if (type === "weekly") {
+        const day = el("chat-weekly-day").value;
+        const time = el("chat-weekly-time").value;
+        if (!time) {
+          window.alert("Please select a time");
+          return;
+        }
+        const hm = time.split(":");
+        newSchedule =
+          "cron:" + parseInt(hm[1], 10) + " " + parseInt(hm[0], 10) + " * * " + day;
+      } else if (type === "once") {
+        const dt = el("chat-once-datetime").value;
+        if (!dt) {
+          window.alert("Please select a date and time");
+          return;
+        }
+        newSchedule = "date:" + dt.replace("T", " ") + ":00";
+      } else if (type === "cron") {
+        newSchedule = "cron:" + el("chat-cron-expr").value.trim();
+      }
+      tab.schedule = newSchedule;
+      closeChatScheduleModal();
+      renderTabBar();
+      await persist();
+    }
+
+    async function apiGet(path) {
+      const r = await fetch(API + path);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const d = data.detail;
+        throw new Error(Array.isArray(d) ? JSON.stringify(d) : d || r.statusText || String(r.status));
+      }
+      return data;
+    }
+
+    async function apiPost(path, body) {
+      const r = await fetch(API + path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const d = data.detail;
+        throw new Error(Array.isArray(d) ? JSON.stringify(d) : d || r.statusText || String(r.status));
+      }
+      return data;
+    }
+
+    function promptSessionName(suggested) {
+      return new Promise((resolve) => {
+        const ov = el("nameSessionOverlay");
+        const inp = el("nameSessionInput");
+        const okBtn = el("nameSessionOk");
+        const cancelBtn = el("nameSessionCancel");
+        let done = false;
+        inp.value = suggested || "";
+        ov.hidden = false;
+        requestAnimationFrame(() => {
+          inp.focus();
+          inp.select();
+        });
+        function finish(value) {
+          if (done) return;
+          done = true;
+          okBtn.removeEventListener("click", onOk);
+          cancelBtn.removeEventListener("click", onCancel);
+          inp.removeEventListener("keydown", onKey);
+          ov.removeEventListener("click", onOverlayClick);
+          ov.hidden = true;
+          resolve(value);
+        }
+        function onOk() {
+          finish(inp.value);
+        }
+        function onCancel() {
+          finish(null);
+        }
+        function onOverlayClick(ev) {
+          if (ev.target === ov) onCancel();
+        }
+        function onKey(ev) {
+          if (ev.key === "Enter") {
+            ev.preventDefault();
+            onOk();
+          }
+          if (ev.key === "Escape") {
+            ev.preventDefault();
+            onCancel();
+          }
+        }
+        okBtn.addEventListener("click", onOk);
+        cancelBtn.addEventListener("click", onCancel);
+        inp.addEventListener("keydown", onKey);
+        ov.addEventListener("click", onOverlayClick);
+      });
+    }
+
+    async function loadStateFromServer() {
+      const data = await apiGet("/api/state");
+      state.tabs = (data.tabs || []).map(normalizeTab);
+      state.activeTabId = data.active_tab_id || "";
+      if (!state.tabs.length) {
+        const first = emptyTab("Chat 1", null);
+        state.tabs = [first];
+        state.activeTabId = first.id;
+      }
+      if (!state.tabs.some((t) => t.id === state.activeTabId)) {
+        state.activeTabId = state.tabs[0].id;
+      }
+    }
+
+    function getActiveTab() {
+      const t = state.tabs.find((x) => x.id === state.activeTabId) || state.tabs[0];
+      return t;
+    }
+
+    function ensureActiveTab() {
+      let t = getActiveTab();
+      if (!t) {
+        const first = emptyTab("Chat 1", null);
+        state.tabs = [first];
+        state.activeTabId = first.id;
+        t = first;
+      }
+      return t;
+    }
+
+    function snapshotFieldsToTab(tab) {
+      tab.cliPrefix = el("cliPrefix").value.trim() || DEFAULT_PREFIX;
+      tab.cmdPreview = el("cmdPreview").textContent || "\u2014";
+      tab.schedulerEnabled = el("schedEnabledToggle").checked;
+      tab.schedulerPrompt = el("schedulerPrompt").value;
+    }
+
+    function formatLocalMessageStamp() {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, "0");
+      return (
+        d.getFullYear() +
+        "-" +
+        p(d.getMonth() + 1) +
+        "-" +
+        p(d.getDate()) +
+        " " +
+        p(d.getHours()) +
+        ":" +
+        p(d.getMinutes())
+      );
+    }
+
+    function scrollMessagesToEnd() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function scheduleScrollMessagesToEnd() {
+      scrollMessagesToEnd();
+      requestAnimationFrame(() => {
+        scrollMessagesToEnd();
+        requestAnimationFrame(scrollMessagesToEnd);
+      });
+    }
+
+    async function applyTabToFields(tab) {
+      el("chatIdDisplay").dataset.raw = tab.chatId || "";
+      el("chatIdDisplay").textContent = tab.chatId || "(none — + New chat in this tab)";
+      el("btnCopyId").disabled = !tab.chatId;
+      el("schedEnabledToggle").disabled = !tab.slug;
+      el("btnSchedule").disabled = !tab.slug;
+      el("schedulerPrompt").disabled = !tab.slug;
+      el("schedEnabledToggle").checked = !!tab.schedulerEnabled;
+      el("schedulerPrompt").value = tab.schedulerPrompt != null ? tab.schedulerPrompt : "";
+      el("btnAgentsMd").disabled = !tab.slug;
+      el("btnOpenWorkspace").disabled = !tab.slug;
+      el("btnDeleteSession").disabled = !tab.slug;
+      el("cliPrefix").value = tab.cliPrefix || DEFAULT_PREFIX;
+      renderMessages(tab.messages);
+      await refreshCmdPreview();
+      scheduleScrollMessagesToEnd();
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(scheduleScrollMessagesToEnd);
+      }
+      updateSchedNextRunLabel(tab);
+      applyGlobalBusyUi();
+    }
+
+    function applyGlobalBusyUi() {
+      const tab = ensureActiveTab();
+      const schedulerBusy = !!(tab.slug && tab.schedulerAgentBusy);
+      const b = manualSendBusy || schedulerBusy;
+      el("btnSend").disabled = b;
+      el("btnNewChat").disabled = b;
+      el("schedEnabledToggle").disabled = b || !tab.slug;
+      el("btnSchedule").disabled = b || !tab.slug;
+      el("schedulerPrompt").disabled = b || !tab.slug;
+      el("btnAgentsMd").disabled = b || !tab.slug;
+      el("btnOpenWorkspace").disabled = b || !tab.slug;
+      el("btnDeleteSession").disabled = b || !tab.slug;
+      el("statusSpinner").hidden = !b;
+      if (b) {
+        status.textContent = "Agent running\u2026";
+      } else if (status.textContent === "Agent running\u2026") {
+        status.textContent = "";
+      }
+    }
+
+    function updateSchedNextRunLabel(tab) {
+      const span = el("schedNextRunDisplay");
+      const text =
+        tab.schedulerEnabled && tab.slug && tab.schedulerNextRunDisplay
+          ? tab.schedulerNextRunDisplay
+          : "";
+      span.textContent = text;
+      span.hidden = !text;
+      const btn = el("btnSchedule");
+      btn.title = text ? "Next run " + text + " — edit schedule" : "Edit schedule";
+    }
+
+    function stopSchedulerPoll() {
+      if (schedulerPollTimer) {
+        clearInterval(schedulerPollTimer);
+        schedulerPollTimer = null;
+      }
+    }
+
+    async function pullSchedulerUpdates() {
+      try {
+        const data = await apiGet("/api/state");
+        const serverTabs = (data.tabs || []).map(normalizeTab);
+        const byId = new Map(serverTabs.map((t) => [t.id, t]));
+        let changed = false;
+        for (const t of state.tabs) {
+          const st = byId.get(t.id);
+          if (!st) continue;
+          if (JSON.stringify(t.messages) !== JSON.stringify(st.messages)) {
+            t.messages = st.messages;
+            changed = true;
+          }
+          const nextA = t.schedulerNextRunDisplay || "";
+          const nextB = st.schedulerNextRunDisplay || "";
+          if (nextA !== nextB) {
+            t.schedulerNextRunDisplay = st.schedulerNextRunDisplay;
+            changed = true;
+          }
+          const busyA = !!t.schedulerAgentBusy;
+          const busyB = !!st.schedulerAgentBusy;
+          if (busyA !== busyB) {
+            t.schedulerAgentBusy = busyB;
+            changed = true;
+          }
+        }
+        if (changed) {
+          const active = getActiveTab();
+          renderMessages(active.messages);
+          updateSchedNextRunLabel(active);
+        }
+        applyGlobalBusyUi();
+        if (!state.tabs.some((x) => x.schedulerEnabled && x.slug)) {
+          stopSchedulerPoll();
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    function restartSchedulerPoll() {
+      stopSchedulerPoll();
+      if (!state.tabs.some((t) => t.schedulerEnabled && t.slug)) return;
+      void pullSchedulerUpdates();
+      schedulerPollTimer = setInterval(() => void pullSchedulerUpdates(), 2000);
+    }
+
+    function renderMessages(msgs) {
+      messagesEl.innerHTML = "";
+      for (const m of msgs) {
+        const div = document.createElement("div");
+        div.className = "bubble " + m.role + (m.err ? " err" : "");
+        if (m.role === "user" && m.ts) {
+          div.classList.add("bubble-with-ts");
+          const tsEl = document.createElement("div");
+          tsEl.className = "bubble-ts";
+          tsEl.setAttribute("aria-label", "Sent at " + m.ts);
+          tsEl.textContent = m.ts;
+          div.appendChild(tsEl);
+        }
+        const textEl = document.createElement("div");
+        textEl.className = "bubble-text";
+        textEl.textContent = m.text;
+        div.appendChild(textEl);
+        messagesEl.appendChild(div);
+      }
+      scheduleScrollMessagesToEnd();
+    }
+
+    async function persist() {
+      snapshotFieldsToTab(ensureActiveTab());
+      const tabs = state.tabs.map((t) => ({
+        id: t.id,
+        slug: t.slug || null,
+        title: t.title,
+        chatId: t.chatId,
+        cliPrefix: t.cliPrefix,
+        cmdPreview: t.cmdPreview,
+        messages: t.messages,
+        schedulerEnabled: !!t.schedulerEnabled,
+        schedule: t.schedule && String(t.schedule).trim() ? String(t.schedule).trim() : "interval:15m",
+        schedulerPrompt: t.schedulerPrompt != null ? String(t.schedulerPrompt) : "",
+      }));
+      await apiPost("/api/persist", {
+        active_tab_id: state.activeTabId,
+        tabs,
+      });
+      restartSchedulerPoll();
+    }
+
+    function renderTabBar() {
+      tabBar.innerHTML = "";
+      for (const tab of state.tabs) {
+        const wrap = document.createElement("div");
+        wrap.className = "tab" + (tab.id === state.activeTabId ? " active" : "");
+        wrap.setAttribute("role", "tab");
+        wrap.setAttribute("aria-selected", tab.id === state.activeTabId ? "true" : "false");
+        const title = document.createElement("span");
+        title.className = "tab-title";
+        title.textContent = tab.title;
+        const tip = [tab.title];
+        if (tab.slug) tip.push("slug: " + tab.slug);
+        if (tab.chatId) tip.push(tab.chatId);
+        if (tab.schedulerEnabled && tab.schedule) {
+          tip.push("schedule: " + formatScheduleDisplay(tab.schedule));
+        }
+        title.title = tip.join("\n");
+        wrap.appendChild(title);
+        if (state.tabs.length > 1) {
+          const cx = document.createElement("button");
+          cx.type = "button";
+          cx.className = "tab-close";
+          cx.setAttribute("aria-label", "Close tab");
+          cx.textContent = "\u00d7";
+          cx.addEventListener("click", (e) => {
+            e.stopPropagation();
+            closeTab(tab.id);
+          });
+          wrap.appendChild(cx);
+        }
+        wrap.addEventListener("click", () => switchTab(tab.id));
+        tabBar.appendChild(wrap);
+      }
+    }
+
+    async function switchTab(id) {
+      closeAgentsMdOverlay();
+      closeChatScheduleModal();
+      snapshotFieldsToTab(getActiveTab());
+      state.activeTabId = id;
+      await applyTabToFields(getActiveTab());
+      renderTabBar();
+      await persist();
+    }
+
+    async function closeTab(id) {
+      if (state.tabs.length <= 1) return;
+      closeAgentsMdOverlay();
+      closeChatScheduleModal();
+      snapshotFieldsToTab(getActiveTab());
+      const idx = state.tabs.findIndex((t) => t.id === id);
+      if (idx < 0) return;
+      state.tabs.splice(idx, 1);
+      if (state.activeTabId === id) {
+        state.activeTabId = state.tabs[Math.max(0, idx - 1)].id;
+      }
+      await applyTabToFields(getActiveTab());
+      renderTabBar();
+      await persist();
+    }
+
+    async function appendToActive(role, text, isError) {
+      const tab = ensureActiveTab();
+      const entry = { role, text, err: !!isError };
+      if (role === "user") entry.ts = formatLocalMessageStamp();
+      tab.messages.push(entry);
+      renderMessages(tab.messages);
+      await persist();
+    }
+
+    function setBusy(b) {
+      manualSendBusy = b;
+      applyGlobalBusyUi();
+    }
+
+    async function initChatUi() {
+      try {
+        status.textContent = "Loading\u2026";
+        await loadStateFromServer();
+        status.textContent = "";
+      } catch (e) {
+        status.textContent = "Load failed: " + e.message;
+        if (!state.tabs.length) {
+          const first = emptyTab("Chat 1", null);
+          state.tabs = [first];
+          state.activeTabId = first.id;
+        }
+      }
+      await applyTabToFields(ensureActiveTab());
+      renderTabBar();
+      scheduleScrollMessagesToEnd();
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(scheduleScrollMessagesToEnd);
+      }
+      restartSchedulerPoll();
+    }
+
+    void initChatUi();
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) return;
+      if (state.tabs.some((t) => t.schedulerEnabled && t.slug)) {
+        void pullSchedulerUpdates();
+      }
+    });
+
+    el("chat-schedule-type").addEventListener("change", updateChatScheduleUI);
+
+    el("schedEnabledToggle").addEventListener("change", () => {
+      snapshotFieldsToTab(getActiveTab());
+      renderTabBar();
+      void persist();
+    });
+
+    el("btnSchedule").addEventListener("click", () => openChatScheduleModal());
+
+    el("scheduleCancel").addEventListener("click", () => closeChatScheduleModal());
+
+    el("scheduleSave").addEventListener("click", () => void saveChatSchedule());
+
+    el("scheduleOverlay").addEventListener("click", (ev) => {
+      if (ev.target === el("scheduleOverlay")) closeChatScheduleModal();
+    });
+
+    el("schedulerPrompt").addEventListener("change", () => {
+      snapshotFieldsToTab(getActiveTab());
+      void persist();
+    });
+
+    el("btnAgentsMd").addEventListener("click", () => void openAgentsMdOverlay());
+
+    el("btnOpenWorkspace").addEventListener("click", async () => {
+      const tab = ensureActiveTab();
+      if (!tab.slug) return;
+      try {
+        await apiPost("/api/open-workspace", { slug: tab.slug });
+      } catch (e) {
+        status.textContent = "Could not open folder: " + e.message;
+      }
+    });
+
+    el("btnDeleteSession").addEventListener("click", async () => {
+      const tab = ensureActiveTab();
+      if (!tab.slug) return;
+      const title = (tab.title || tab.slug || "this session").replace(/</g, "");
+      const msg =
+        "Delete session \"" +
+        title +
+        "\"?\n\nThe folder chats/" +
+        tab.slug +
+        " and ALL files inside it (AGENTS.md, session data, messages, and anything else) will be permanently removed. This cannot be undone.";
+      if (!window.confirm(msg)) return;
+      closeAgentsMdOverlay();
+      closeChatScheduleModal();
+      cancelScheduledCmdPreview();
+      setBusy(true);
+      try {
+        await apiPost("/api/delete-session", { slug: tab.slug });
+        const idx = state.tabs.findIndex((x) => x.id === tab.id);
+        if (idx >= 0) state.tabs.splice(idx, 1);
+        const wasActive = state.activeTabId === tab.id;
+        if (!state.tabs.length) {
+          const first = emptyTab("Chat 1", null);
+          state.tabs = [first];
+          state.activeTabId = first.id;
+        } else if (wasActive) {
+          state.activeTabId = state.tabs[Math.max(0, idx - 1)].id;
+        }
+        await applyTabToFields(ensureActiveTab());
+        renderTabBar();
+        await persist();
+        status.textContent = "Session deleted.";
+        setTimeout(() => {
+          if (status.textContent === "Session deleted.") status.textContent = "";
+        }, 2500);
+      } catch (e) {
+        status.textContent = "Delete failed: " + e.message;
+      } finally {
+        setBusy(false);
+      }
+    });
+    el("agentsMdCancel").addEventListener("click", () => closeAgentsMdOverlay());
+    el("agentsMdSave").addEventListener("click", () => void saveAgentsMd());
+    el("agentsMdOverlay").addEventListener("click", (ev) => {
+      if (ev.target === el("agentsMdOverlay")) closeAgentsMdOverlay();
+    });
+
+    el("cliPrefix").addEventListener("input", scheduleRefreshCmdPreview);
+
+    el("cliPrefix").addEventListener("change", () => {
+      snapshotFieldsToTab(getActiveTab());
+      void persist();
+    });
+
+    el("input").addEventListener("input", scheduleRefreshCmdPreview);
+
+    el("btnCopyId").addEventListener("click", async () => {
+      const id = el("chatIdDisplay").dataset.raw;
+      if (!id) return;
+      await navigator.clipboard.writeText(id);
+      status.textContent = "Copied chat_id.";
+      setTimeout(() => {
+        if (status.textContent === "Copied chat_id.") status.textContent = "";
+      }, 2000);
+    });
+
+    el("btnNewChat").addEventListener("click", async () => {
+      const cur = ensureActiveTab();
+      snapshotFieldsToTab(cur);
+      const suggested =
+        (cur.title && cur.title.replace(/\s+/g, " ").trim()) || "New session";
+      const entered = await promptSessionName(suggested);
+      if (entered === null) {
+        status.textContent = "New chat cancelled.";
+        setTimeout(() => {
+          if (status.textContent === "New chat cancelled.") status.textContent = "";
+        }, 2500);
+        return;
+      }
+      const sessionName = String(entered).replace(/\s+/g, " ").trim() || "Unnamed session";
+
+      setBusy(true);
+      try {
+        const res = await apiPost("/api/new-chat", {
+          session_name: sessionName,
+        });
+        const newTab = {
+          id: res.tab_id,
+          slug: res.slug,
+          title: res.title,
+          chatId: res.chat_id,
+          messages: [],
+          cliPrefix: DEFAULT_PREFIX,
+          cmdPreview: "\u2014",
+          schedulerEnabled: false,
+          schedule: "interval:15m",
+          schedulerPrompt: "",
+          schedulerNextRunDisplay: null,
+          schedulerAgentBusy: false,
+        };
+        const disposableDraft =
+          !cur.slug && (!cur.messages || cur.messages.length === 0);
+        if (disposableDraft) {
+          const idx = state.tabs.findIndex((t) => t.id === cur.id);
+          if (idx >= 0) state.tabs[idx] = newTab;
+          else state.tabs.push(newTab);
+        } else {
+          state.tabs.push(newTab);
+        }
+        state.activeTabId = newTab.id;
+        await applyTabToFields(newTab);
+        renderTabBar();
+        await persist();
+        await appendToActive(
+          "agent",
+          "New session \"" + res.title + "\". chat_id: " + res.chat_id,
+          false,
+        );
+      } catch (e) {
+        await appendToActive("agent", "new-chat failed: " + e.message, true);
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    el("btnSend").addEventListener("click", async () => {
+      const tab = getActiveTab();
+      snapshotFieldsToTab(tab);
+      if (!tab.slug) {
+        status.textContent = "Create a named session first (+ New chat).";
+        return;
+      }
+      const chatId = tab.chatId || el("chatIdDisplay").dataset.raw;
+      if (!chatId) {
+        status.textContent = "Missing chat_id.";
+        return;
+      }
+      const text = el("input").value.trim();
+      if (!text) return;
+
+      cancelScheduledCmdPreview();
+
+      await appendToActive("user", text, false);
+      el("input").value = "";
+      setBusy(true);
+      el("cmdPreview").textContent = "\u2026";
+      tab.cmdPreview = "\u2026";
+
+      try {
+        const data = await apiPost("/api/chat", {
+          cli_prefix: tab.cliPrefix || DEFAULT_PREFIX,
+          chat_id: chatId,
+          slug: tab.slug,
+          message: text,
+        });
+        el("cmdPreview").textContent = data.preview_cmd || "\u2014";
+        tab.cmdPreview = data.preview_cmd || "\u2014";
+        let body = data.stdout || "(empty stdout)";
+        if (data.stderr) body += "\n\n--- stderr ---\n" + data.stderr;
+        if (data.returncode !== 0) {
+          await appendToActive("agent", "exit " + data.returncode + "\n\n" + body, true);
+        } else {
+          await appendToActive("agent", body, false);
+        }
+      } catch (e) {
+        await appendToActive("agent", "request failed: " + e.message, true);
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    el("input").addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault();
+        el("btnSend").click();
+      }
+    });
+
+  </script>
+</body>
+</html>

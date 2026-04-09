@@ -1,0 +1,27 @@
+# AgentChat — web UI for the Cursor Agent CLI
+
+Self-hosted **FastAPI** app with a browser chat interface for the Cursor **`agent`** CLI: multiple tabs, per-session workspaces with **AGENTS.md**, command preview, and optional **scheduled** runs (APScheduler). Use it to chat with the same CLI flow you use in the terminal, without leaving the browser.
+
+## Requirements
+
+- Python 3.10+ (3.11+ recommended)
+- [Cursor](https://cursor.com) CLI available on your `PATH` as `agent` (same as your normal Cursor agent usage)
+
+## Run from scratch
+
+```bash
+cd cursor-agent-chat
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+# source .venv/bin/activate   # macOS / Linux
+pip install -r requirements.txt
+python server.py
+```
+
+Open **http://127.0.0.1:8765** (see `server.py` if you change `PORT`). On Windows you can use `Start.bat` instead.
+
+Chat data is stored under `./chats/` (ignored by git). Each session is a folder with `session.json` and optional `AGENTS.md`.
+
+## License
+
+Use and modify freely for your own setup; no warranty.

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+.env
+.env.*
+
+# Local session data (per-chat workspaces, session.json, _app_state.json)
+chats/
+
+# Local-only tooling (never ship)
+commit.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor (local preferences)
+.vscode/
+.idea/
+*.swp
+*.swo

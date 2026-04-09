@@ -1,4 +1,4 @@
-﻿# AgentChat — web UI for the Cursor Agent CLI
+# AgentChat — web UI for the Cursor Agent CLI
 
 ## Screenshot
 

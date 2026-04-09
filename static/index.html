@@ -1188,12 +1188,21 @@
       await persist();
     }
 
+    function httpErrorMessage(r, data) {
+      const d = data && data.detail;
+      if (d !== undefined && d !== null) {
+        if (Array.isArray(d)) return JSON.stringify(d);
+        const s = String(d);
+        if (s.length) return s;
+      }
+      return r.statusText || String(r.status);
+    }
+
     async function apiGet(path) {
       const r = await fetch(API + path);
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        const d = data.detail;
-        throw new Error(Array.isArray(d) ? JSON.stringify(d) : d || r.statusText || String(r.status));
+        throw new Error(httpErrorMessage(r, data));
       }
       return data;
     }
@@ -1206,8 +1215,7 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        const d = data.detail;
-        throw new Error(Array.isArray(d) ? JSON.stringify(d) : d || r.statusText || String(r.status));
+        throw new Error(httpErrorMessage(r, data));
       }
       return data;
     }
@@ -1730,12 +1738,14 @@
         state.activeTabId = newTab.id;
         await applyTabToFields(newTab);
         renderTabBar();
+        const tabWelcome = ensureActiveTab();
+        tabWelcome.messages.push({
+          role: "agent",
+          text: "New session \"" + res.title + "\". chat_id: " + res.chat_id,
+          err: false,
+        });
+        renderMessages(tabWelcome.messages);
         await persist();
-        await appendToActive(
-          "agent",
-          "New session \"" + res.title + "\". chat_id: " + res.chat_id,
-          false,
-        );
       } catch (e) {
         await appendToActive("agent", "new-chat failed: " + e.message, true);
       } finally {

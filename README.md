@@ -26,7 +26,7 @@ pip install -r requirements.txt
 python server.py
 ```
 
-Open **http://127.0.0.1:8765** (see `server.py` if you change `PORT`). On Windows you can use `Start.bat` instead.
+Open **http://127.0.0.1:8765** by default (change `port` and `host` in `config.toml`). On Windows you can use `Start.bat` instead.
 
 Chat data is stored under `./chats/` (ignored by git). Each session is a folder with `session.json` and optional `AGENTS.md`.
 

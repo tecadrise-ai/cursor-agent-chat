@@ -1,0 +1,38 @@
+# AgentChat server configuration (edit and restart server)
+
+[server]
+host = "127.0.0.1"
+port = 8765
+log_level = "info"
+
+[app]
+title = "Agent Chat CLI Test"
+
+[cors]
+allow_origins = ["*"]
+
+[paths]
+static_dir = "static"
+chats_dir = "chats"
+session_file = "session.json"
+app_state_file = "_app_state.json"
+agents_md_file = "AGENTS.md"
+
+[defaults]
+cli_prefix = "agent -p --trust --yolo --approve-mcps --model auto"
+agents_md_default = "You are a helpfull virtual assistant."
+schedule = "interval:15m"
+
+# When AGENTS.md exists, these argv are inserted before the user message
+[cli_trailing]
+instructions_argv = ["read", "instructions", "from", "AGENTS.md"]
+
+[agent]
+create_chat_argv = ["agent", "create-chat"]
+
+[scheduler]
+misfire_grace_time = 43200
+
+[timeouts]
+agent_seconds = 3600
+create_chat_seconds = 120

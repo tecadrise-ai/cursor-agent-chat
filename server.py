@@ -28,16 +28,124 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-PORT = 8765
 ROOT = Path(__file__).resolve().parent
-STATIC = ROOT / "static"
-CHATS = ROOT / "chats"
-SESSION_NAME = "session.json"
-APP_STATE_NAME = "_app_state.json"
-AGENTS_MD_NAME = "AGENTS.md"
-DEFAULT_AGENTS_MD = "You are a helpfull virtual assistant."
-DEFAULT_CLI = "agent -p --trust --yolo --approve-mcps --model auto"
-AGENTS_MD_ARGV = ("read", "instructions", "from", "AGENTS.md")
+CONFIG_PATH = ROOT / "config.toml"
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    out = dict(base)
+    for k, v in override.items():
+        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def _default_config() -> dict:
+    return {
+        "server": {"host": "127.0.0.1", "port": 8765, "log_level": "info"},
+        "app": {"title": "Agent Chat CLI Test"},
+        "cors": {"allow_origins": ["*"]},
+        "paths": {
+            "static_dir": "static",
+            "chats_dir": "chats",
+            "session_file": "session.json",
+            "app_state_file": "_app_state.json",
+            "agents_md_file": "AGENTS.md",
+        },
+        "defaults": {
+            "cli_prefix": "agent -p --trust --yolo --approve-mcps --model auto",
+            "agents_md_default": "You are a helpfull virtual assistant.",
+            "schedule": "interval:15m",
+        },
+        "cli_trailing": {"instructions_argv": ["read", "instructions", "from", "AGENTS.md"]},
+        "agent": {"create_chat_argv": ["agent", "create-chat"]},
+        "scheduler": {"misfire_grace_time": 43200},
+        "timeouts": {"agent_seconds": 3600, "create_chat_seconds": 120},
+    }
+
+
+def _load_config() -> dict:
+    base = _default_config()
+    if not CONFIG_PATH.is_file():
+        return base
+    try:
+        raw = CONFIG_PATH.read_bytes().decode("utf-8")
+        if sys.version_info >= (3, 11):
+            import tomllib
+
+            user = tomllib.loads(raw)
+        else:
+            import tomli
+
+            user = tomli.loads(raw)
+    except Exception as e:
+        print(f"Warning: could not load {CONFIG_PATH}: {e} — using defaults", file=sys.stderr)
+        return base
+    return _deep_merge(base, user)
+
+
+def _coerce_str_list(val, fallback: list[str]) -> list[str]:
+    if isinstance(val, (list, tuple)):
+        out: list[str] = []
+        for x in val:
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        if out:
+            return out
+    if isinstance(val, str) and val.strip():
+        try:
+            parts = shlex.split(val.strip(), posix=(sys.platform != "win32"))
+        except ValueError:
+            return list(fallback)
+        if parts:
+            return parts
+    return list(fallback)
+
+
+def _coerce_cors_origins(val) -> list[str]:
+    if isinstance(val, str) and val.strip():
+        parts = [x.strip() for x in val.replace(";", ",").split(",") if x.strip()]
+        return parts if parts else ["*"]
+    if isinstance(val, list) and val:
+        return [str(x).strip() for x in val if str(x).strip()]
+    return ["*"]
+
+
+_FB_INSTR = ["read", "instructions", "from", "AGENTS.md"]
+_FB_CREATE = ["agent", "create-chat"]
+
+_CFG = _load_config()
+_SERVER = _CFG["server"]
+_APP = _CFG["app"]
+_CORS = _CFG["cors"]
+_PATHS = _CFG["paths"]
+_DEFAULTS = _CFG["defaults"]
+_CLI_TRAIL = _CFG["cli_trailing"]
+_AGENT_CMD = _CFG["agent"]
+_SCHED = _CFG["scheduler"]
+_TO = _CFG["timeouts"]
+
+PORT = int(_SERVER["port"])
+HOST = str(_SERVER["host"])
+LOG_LEVEL = str(_SERVER["log_level"])
+APP_TITLE = str(_APP["title"])
+CORS_ALLOW_ORIGINS = _coerce_cors_origins(_CORS.get("allow_origins"))
+STATIC = ROOT / str(_PATHS["static_dir"])
+CHATS = ROOT / str(_PATHS["chats_dir"])
+SESSION_NAME = str(_PATHS["session_file"])
+APP_STATE_NAME = str(_PATHS["app_state_file"])
+AGENTS_MD_NAME = str(_PATHS["agents_md_file"])
+DEFAULT_AGENTS_MD = str(_DEFAULTS["agents_md_default"])
+DEFAULT_CLI = str(_DEFAULTS["cli_prefix"])
+DEFAULT_SCHEDULE = str(_DEFAULTS["schedule"])
+AGENTS_MD_ARGV = tuple(_coerce_str_list(_CLI_TRAIL.get("instructions_argv"), _FB_INSTR))
+CREATE_CHAT_ARGV = _coerce_str_list(_AGENT_CMD.get("create_chat_argv"), _FB_CREATE)
+SCHEDULER_MISFIRE_GRACE = int(_SCHED["misfire_grace_time"])
+TIMEOUT_AGENT_S = int(_TO["agent_seconds"])
+TIMEOUT_CREATE_CHAT_S = int(_TO["create_chat_seconds"])
 
 
 def _chats_dir() -> Path:
@@ -213,12 +321,12 @@ def execute_scheduled_chat(slug: str) -> None:
         except ValueError:
             return
         try:
-            r = _run_agent(args, cwd=str(ws), timeout=3600)
+            r = _run_agent(args, cwd=str(ws), timeout=TIMEOUT_AGENT_S)
         except subprocess.TimeoutExpired:
             _append_scheduler_messages_and_save(
                 slug,
                 prompt,
-                "Scheduled run timed out (3600s).",
+                f"Scheduled run timed out ({TIMEOUT_AGENT_S}s).",
                 True,
             )
             return
@@ -244,7 +352,7 @@ def schedule_chat_job(slug: str, schedule_str: str, enabled: bool) -> None:
         _chat_sched_sig.pop(slug, None)
         return
 
-    sched_norm = (schedule_str or "interval:15m").strip()
+    sched_norm = (schedule_str or DEFAULT_SCHEDULE).strip()
     sig: tuple[bool, str] = (True, sched_norm.lower())
     if _chat_sched_sig.get(slug) == sig and scheduler.get_job(job_id):
         return
@@ -261,7 +369,7 @@ def schedule_chat_job(slug: str, schedule_str: str, enabled: bool) -> None:
         "id": job_id,
         "coalesce": True,
         "max_instances": 1,
-        "misfire_grace_time": 43200,
+        "misfire_grace_time": SCHEDULER_MISFIRE_GRACE,
         "replace_existing": True,
     }
     try:
@@ -329,7 +437,7 @@ def _sync_scheduler_from_tabs_payload(tabs: list[dict]) -> None:
         slugs_in_tabs.add(str(slug))
         schedule_chat_job(
             str(slug),
-            t.get("schedule") or "interval:15m",
+            t.get("schedule") or DEFAULT_SCHEDULE,
             bool(t.get("schedulerEnabled")),
         )
     for job in list(scheduler.get_jobs()):
@@ -404,10 +512,10 @@ async def _lifespan(_: FastAPI):
         scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="Agent Chat CLI Test", lifespan=_lifespan)
+app = FastAPI(title=APP_TITLE, lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOW_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -490,7 +598,7 @@ def _run_agent(argv: list[str], *, cwd: str | None, timeout: int) -> subprocess.
 
 
 def _new_chat_id() -> str:
-    r = _run_agent(["agent", "create-chat"], cwd=None, timeout=120)
+    r = _run_agent(CREATE_CHAT_ARGV, cwd=None, timeout=TIMEOUT_CREATE_CHAT_S)
     if r.returncode != 0:
         raise RuntimeError(r.stderr or r.stdout or "create-chat failed")
     out = (r.stdout or "").strip()
@@ -524,7 +632,7 @@ def _scan_disk_tabs() -> list[dict]:
                 "cmdPreview": data.get("cmd_preview") or "\u2014",
                 "messages": data.get("messages") or [],
                 "schedulerEnabled": bool(data.get("scheduler_enabled")),
-                "schedule": data.get("schedule") or "interval:15m",
+                "schedule": data.get("schedule") or DEFAULT_SCHEDULE,
                 "schedulerPrompt": data.get("scheduler_prompt") or "",
             }
         )
@@ -544,7 +652,7 @@ def _default_state() -> dict:
                 "cmdPreview": "\u2014",
                 "messages": [],
                 "schedulerEnabled": False,
-                "schedule": "interval:15m",
+                "schedule": DEFAULT_SCHEDULE,
                 "schedulerPrompt": "",
             }
         ],
@@ -561,7 +669,7 @@ class TabState(BaseModel):
     cmdPreview: str = "\u2014"
     messages: list[dict] = Field(default_factory=list)
     schedulerEnabled: bool = False
-    schedule: str = "interval:15m"
+    schedule: str = DEFAULT_SCHEDULE
     schedulerPrompt: str = ""
 
 
@@ -634,7 +742,7 @@ def api_get_state():
                     "cmdPreview": t.get("cmdPreview") if t.get("cmdPreview") else "\u2014",
                     "messages": t.get("messages") if isinstance(t.get("messages"), list) else [],
                     "schedulerEnabled": bool(t.get("schedulerEnabled")),
-                    "schedule": t.get("schedule") or "interval:15m",
+                    "schedule": t.get("schedule") or DEFAULT_SCHEDULE,
                     "schedulerPrompt": t.get("schedulerPrompt")
                     if isinstance(t.get("schedulerPrompt"), str)
                     else "",
@@ -657,38 +765,46 @@ def api_get_state():
 
 @app.post("/api/persist")
 def api_persist(body: PersistBody):
-    root = _chats_dir()
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    serial_tabs: list[dict] = []
-    for tab in body.tabs:
-        d = tab.model_dump()
-        serial_tabs.append(d)
-        if tab.slug:
-            slug = str(tab.slug)
-            pdir = root / slug
-            pdir.mkdir(parents=True, exist_ok=True)
-            session = {
-                "slug": slug,
-                "tab_id": tab.id,
-                "title": tab.title,
-                "chat_id": tab.chatId,
-                "cli_prefix": tab.cliPrefix,
-                "cmd_preview": tab.cmdPreview,
-                "messages": tab.messages,
-                "updated_at": now,
-                "scheduler_enabled": tab.schedulerEnabled,
-                "schedule": tab.schedule or "interval:15m",
-                "scheduler_prompt": tab.schedulerPrompt or "",
-            }
-            _write_json_atomic(pdir / SESSION_NAME, session)
-    meta = {
-        "version": 1,
-        "active_tab_id": body.active_tab_id,
-        "tabs": serial_tabs,
-        "saved_at": now,
-    }
-    _write_json_atomic(CHATS / APP_STATE_NAME, meta)
-    _sync_scheduler_from_tabs_payload(serial_tabs)
+    try:
+        root = _chats_dir()
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        serial_tabs: list[dict] = []
+        for tab in body.tabs:
+            d = tab.model_dump()
+            serial_tabs.append(d)
+            if tab.slug:
+                slug = str(tab.slug)
+                pdir = root / slug
+                pdir.mkdir(parents=True, exist_ok=True)
+                session = {
+                    "slug": slug,
+                    "tab_id": tab.id,
+                    "title": tab.title,
+                    "chat_id": tab.chatId,
+                    "cli_prefix": tab.cliPrefix,
+                    "cmd_preview": tab.cmdPreview,
+                    "messages": tab.messages,
+                    "updated_at": now,
+                    "scheduler_enabled": tab.schedulerEnabled,
+                    "schedule": tab.schedule or DEFAULT_SCHEDULE,
+                    "scheduler_prompt": tab.schedulerPrompt or "",
+                }
+                _write_json_atomic(pdir / SESSION_NAME, session)
+        meta = {
+            "version": 1,
+            "active_tab_id": body.active_tab_id,
+            "tabs": serial_tabs,
+            "saved_at": now,
+        }
+        _write_json_atomic(CHATS / APP_STATE_NAME, meta)
+        _sync_scheduler_from_tabs_payload(serial_tabs)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"persist failed: {e!s}",
+        ) from e
     return {"ok": True}
 
 
@@ -711,7 +827,7 @@ def api_new_chat(body: NewChatBody):
             ws.rmdir()
         except OSError:
             pass
-        raise HTTPException(500, str(e)) from e
+        raise HTTPException(status_code=500, detail=(str(e) or repr(e) or "new-chat failed")) from e
     tab_id = "tab_" + uuid.uuid4().hex[:16]
     title = body.session_name.strip() or slug
     session = {
@@ -724,7 +840,7 @@ def api_new_chat(body: NewChatBody):
         "messages": [],
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "scheduler_enabled": False,
-        "schedule": "interval:15m",
+        "schedule": DEFAULT_SCHEDULE,
         "scheduler_prompt": "",
     }
     _write_json_atomic(ws / SESSION_NAME, session)
@@ -865,9 +981,9 @@ def api_chat(req: ChatRequest):
         raise HTTPException(400, str(e)) from e
 
     try:
-        r = _run_agent(args, cwd=str(ws), timeout=3600)
+        r = _run_agent(args, cwd=str(ws), timeout=TIMEOUT_AGENT_S)
     except subprocess.TimeoutExpired:
-        raise HTTPException(504, "agent timed out (3600s)") from None
+        raise HTTPException(504, f"agent timed out ({TIMEOUT_AGENT_S}s)") from None
 
     out = (r.stdout or "").strip()
     err = (r.stderr or "").strip()
@@ -882,4 +998,4 @@ def api_chat(req: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")
+    uvicorn.run(app, host=HOST, port=PORT, log_level=LOG_LEVEL)

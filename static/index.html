@@ -339,7 +339,7 @@
       flex: 1;
       min-height: 0;
       overflow-y: auto;
-      padding: 14px 16px;
+      padding: 18px 18px 14px 22px;
       display: flex;
       flex-direction: column;
       align-items: flex-start;
@@ -348,6 +348,7 @@
     }
     .bubble {
       max-width: 92%;
+      min-width: 3.25rem;
       padding: 0;
       border-radius: 10px;
       font-size: 0.875rem;
@@ -379,6 +380,8 @@
     .bubble.user.bubble-with-ts {
       overflow: visible;
       margin-top: 10px;
+      /* Timestamp is centered on the top edge; keep bubble wide enough so the chip stays in view */
+      min-width: min(92%, 11.5rem);
     }
     .bubble.user .bubble-ts {
       position: absolute;
@@ -895,6 +898,29 @@
       return '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
     }
 
+    /** Close only when press+release both hit the backdrop (avoids closing after text select that ends on backdrop). */
+    function attachModalBackdropDismiss(overlay, onDismiss) {
+      let downOnBackdrop = false;
+      function onPointerDown(ev) {
+        downOnBackdrop = ev.target === overlay;
+      }
+      function onPointerUp(ev) {
+        if (downOnBackdrop && ev.target === overlay) onDismiss();
+        downOnBackdrop = false;
+      }
+      function onPointerCancel() {
+        downOnBackdrop = false;
+      }
+      overlay.addEventListener("pointerdown", onPointerDown);
+      overlay.addEventListener("pointerup", onPointerUp);
+      overlay.addEventListener("pointercancel", onPointerCancel);
+      return function detachModalBackdropDismiss() {
+        overlay.removeEventListener("pointerdown", onPointerDown);
+        overlay.removeEventListener("pointerup", onPointerUp);
+        overlay.removeEventListener("pointercancel", onPointerCancel);
+      };
+    }
+
     function scheduleRefreshCmdPreview() {
       if (previewDebounce) clearTimeout(previewDebounce);
       previewDebounce = setTimeout(() => {
@@ -1233,13 +1259,14 @@
           inp.focus();
           inp.select();
         });
+        let detachBackdrop = function () {};
         function finish(value) {
           if (done) return;
           done = true;
           okBtn.removeEventListener("click", onOk);
           cancelBtn.removeEventListener("click", onCancel);
           inp.removeEventListener("keydown", onKey);
-          ov.removeEventListener("click", onOverlayClick);
+          detachBackdrop();
           ov.hidden = true;
           resolve(value);
         }
@@ -1248,9 +1275,6 @@
         }
         function onCancel() {
           finish(null);
-        }
-        function onOverlayClick(ev) {
-          if (ev.target === ov) onCancel();
         }
         function onKey(ev) {
           if (ev.key === "Enter") {
@@ -1262,10 +1286,10 @@
             onCancel();
           }
         }
+        detachBackdrop = attachModalBackdropDismiss(ov, onCancel);
         okBtn.addEventListener("click", onOk);
         cancelBtn.addEventListener("click", onCancel);
         inp.addEventListener("keydown", onKey);
-        ov.addEventListener("click", onOverlayClick);
       });
     }
 
@@ -1606,9 +1630,7 @@
 
     el("scheduleSave").addEventListener("click", () => void saveChatSchedule());
 
-    el("scheduleOverlay").addEventListener("click", (ev) => {
-      if (ev.target === el("scheduleOverlay")) closeChatScheduleModal();
-    });
+    attachModalBackdropDismiss(el("scheduleOverlay"), () => closeChatScheduleModal());
 
     el("schedulerPrompt").addEventListener("change", () => {
       snapshotFieldsToTab(getActiveTab());
@@ -1669,9 +1691,7 @@
     });
     el("agentsMdCancel").addEventListener("click", () => closeAgentsMdOverlay());
     el("agentsMdSave").addEventListener("click", () => void saveAgentsMd());
-    el("agentsMdOverlay").addEventListener("click", (ev) => {
-      if (ev.target === el("agentsMdOverlay")) closeAgentsMdOverlay();
-    });
+    attachModalBackdropDismiss(el("agentsMdOverlay"), () => closeAgentsMdOverlay());
 
     el("cliPrefix").addEventListener("input", scheduleRefreshCmdPreview);
 

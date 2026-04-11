@@ -280,8 +280,11 @@
       color: var(--gray-500);
       white-space: pre-wrap;
       word-break: break-all;
-      max-height: 140px;
+      height: 120px;
+      min-height: 120px;
+      max-height: 120px;
       overflow-y: auto;
+      overflow-x: hidden;
       padding: 8px 10px;
       background: var(--white);
       border-radius: 6px;
@@ -331,20 +334,84 @@
     }
     .chat-main {
       flex: 1;
-      display: flex;
-      flex-direction: column;
       min-height: 0;
+      position: relative;
+      overflow: hidden;
     }
     .messages {
-      flex: 1;
-      min-height: 0;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
       overflow-y: auto;
+      overflow-x: hidden;
       padding: 18px 18px 14px 22px;
       display: flex;
       flex-direction: column;
       align-items: flex-start;
       gap: 10px;
       background: var(--gray-50);
+      z-index: 1;
+    }
+    .chat-splitter {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 10px;
+      box-sizing: border-box;
+      cursor: ns-resize;
+      touch-action: none;
+      background: var(--gray-100);
+      border: solid var(--gray-200);
+      border-width: 1px 0;
+      z-index: 3;
+    }
+    .chat-splitter::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 28px;
+      height: 3px;
+      margin: -1.5px 0 0 -14px;
+      border-radius: 2px;
+      background: var(--gray-400);
+      pointer-events: none;
+    }
+    .chat-splitter:hover {
+      background: var(--gray-50);
+    }
+    .chat-splitter:hover::after {
+      background: var(--brand-500);
+    }
+    .chat-bottom {
+      position: absolute;
+      left: 0;
+      right: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--white);
+      z-index: 2;
+    }
+    .chat-bottom .status {
+      border-top: none;
+      border-bottom: 1px solid var(--gray-200);
+      flex-shrink: 0;
+    }
+    .chat-bottom .composer {
+      border-top: none;
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      min-height: 0;
+    }
+    .chat-bottom .composer textarea {
+      flex: 1;
+      min-height: 44px;
+      max-height: none;
+      min-width: 0;
     }
     .bubble {
       max-width: 92%;
@@ -432,7 +499,7 @@
       background: var(--gray-50);
       flex-shrink: 0;
       border-top: 1px solid var(--gray-200);
-      min-height: 2rem;
+      min-height: 1rem;
     }
     .status-spinner {
       width: 14px;
@@ -718,13 +785,22 @@
           <div class="tab-bar" id="tabBar" aria-label="Chat sessions"></div>
           <div class="chat-main">
             <div class="messages" id="messages" aria-live="polite"></div>
-            <div class="status" aria-live="polite">
-              <span class="status-spinner" id="statusSpinner" hidden></span>
-              <span id="status"></span>
-            </div>
-            <div class="composer">
-              <textarea id="input" placeholder="Message to agent…" rows="2"></textarea>
-              <button type="button" id="btnSend">Send</button>
+            <div
+              class="chat-splitter"
+              id="chatSplitter"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Drag to resize chat area"
+            ></div>
+            <div class="chat-bottom">
+              <div class="status" aria-live="polite">
+                <span class="status-spinner" id="statusSpinner" hidden></span>
+                <span id="status"></span>
+              </div>
+              <div class="composer">
+                <textarea id="input" placeholder="Message to agent…" rows="2"></textarea>
+                <button type="button" id="btnSend">Send</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1605,6 +1681,96 @@
         document.fonts.ready.then(scheduleScrollMessagesToEnd);
       }
       restartSchedulerPoll();
+      initChatSplitter();
+    }
+
+    function initChatSplitter() {
+      const split = el("chatSplitter");
+      const msg = el("messages");
+      const bottom = el("input") && el("input").closest(".chat-bottom");
+      const main = msg && msg.closest(".chat-main");
+      if (!split || !msg || !main || !bottom || split.dataset.splitterInit) return;
+      split.dataset.splitterInit = "1";
+
+      const SPLITTER_H = 10;
+      const MIN_BOTTOM = 100;
+      const MIN_MESSAGES = 80;
+      const LS_KEY = "agentchat_bottom_px_v2";
+      let dragging = false;
+      let startY = 0;
+      let startBottomH = 0;
+      let bottomPx = 140;
+
+      localStorage.removeItem("agentchat_bottom_px");
+      localStorage.removeItem("agentchat_messages_px");
+
+      const v0 = localStorage.getItem(LS_KEY);
+      if (v0 != null) {
+        const h0 = parseInt(v0, 10);
+        if (Number.isFinite(h0) && h0 >= MIN_BOTTOM) bottomPx = h0;
+      }
+
+      function applyLayout() {
+        const wasNearBottom =
+          msg.scrollHeight - msg.clientHeight - msg.scrollTop < 24;
+        const mainH = main.clientHeight;
+        const maxBottom = mainH - SPLITTER_H - MIN_MESSAGES;
+        const h = Math.max(MIN_BOTTOM, Math.min(maxBottom, bottomPx));
+        bottomPx = h;
+
+        const msgHeight = mainH - SPLITTER_H - h;
+        const splitTop = msgHeight;
+        const bottomTop = msgHeight + SPLITTER_H;
+
+        msg.style.top = "0";
+        msg.style.bottom = SPLITTER_H + h + "px";
+        msg.style.height = "auto";
+
+        split.style.top = splitTop + "px";
+        split.style.bottom = "auto";
+
+        bottom.style.top = bottomTop + "px";
+        bottom.style.bottom = "0";
+        bottom.style.height = "auto";
+
+        if (dragging || wasNearBottom) {
+          requestAnimationFrame(() => {
+            msg.scrollTop = msg.scrollHeight;
+          });
+        }
+      }
+
+      applyLayout();
+      window.addEventListener("resize", applyLayout);
+      new ResizeObserver(applyLayout).observe(main);
+
+      split.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        dragging = true;
+        split.setPointerCapture(e.pointerId);
+        startY = e.clientY;
+        startBottomH = bottomPx;
+      });
+
+      split.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const dy = e.clientY - startY;
+        bottomPx = startBottomH - dy;
+        applyLayout();
+      });
+
+      function endDrag(e) {
+        if (!dragging) return;
+        dragging = false;
+        try {
+          split.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+        localStorage.setItem(LS_KEY, String(Math.round(bottomPx)));
+      }
+
+      split.addEventListener("pointerup", endDrag);
+      split.addEventListener("pointercancel", endDrag);
     }
 
     void initChatUi();

@@ -1,12 +1,5 @@
 {
   "mcpServers": {
-    "hyperbrowser": {
-      "command": "npx",
-      "args": ["-y", "hyperbrowser-mcp"],
-      "env": {
-        "HYPERBROWSER_API_KEY": "hb_74a5a7e0da0d52dd539354a3e3d9"
-      }
-    },
     "playwright": {
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"]

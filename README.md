@@ -1,5 +1,8 @@
 # AgentChat — web UI for the Cursor Agent CLI
 
+## How It Works?
+It allows you to run your Cursor Agents in OpenClaw/Hermes agent style, with continous sessions and scheduled triggers! 
+
 ## Screenshot
 
 How AgentChat looks in the browser (multi-tab chat, Session and CLI sidebar, command preview, scheduler).

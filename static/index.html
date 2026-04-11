@@ -500,6 +500,21 @@
       padding: 0.2em 0 0.2em 0.8em;
       color: #555;
     }
+    .bubble.agent .bubble-text table {
+      border-collapse: collapse;
+      margin: 0.8em 0;
+      width: 100%;
+    }
+    .bubble.agent .bubble-text th,
+    .bubble.agent .bubble-text td {
+      border: 1px solid #ddd;
+      padding: 6px 10px;
+      text-align: left;
+    }
+    .bubble.agent .bubble-text th {
+      background: rgba(0,0,0,0.03);
+      font-weight: 600;
+    }
     .bubble.agent .bubble-text a {
       color: var(--accent);
       text-decoration: underline;
@@ -1776,6 +1791,29 @@
             i++;
           }
           html.push("<ul>" + items.join("") + "</ul>");
+          continue;
+        }
+        if (/^\|.*\|$/.test(line.trim())) {
+          var table = ["<table>"];
+          var isHeader = true;
+          while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) {
+            var row = lines[i].trim();
+            if (/^\|[-:| ]+\|$/.test(row)) {
+              isHeader = false;
+              i++;
+              continue;
+            }
+            var cells = row.replace(/^\||\|$/g, "").split("|");
+            table.push("<tr>");
+            for (var j = 0; j < cells.length; j++) {
+              var tag = isHeader ? "th" : "td";
+              table.push("<" + tag + ">" + inlineMarkdown(esc(cells[j].trim())) + "</" + tag + ">");
+            }
+            table.push("</tr>");
+            i++;
+          }
+          table.push("</table>");
+          html.push(table.join(""));
           continue;
         }
         if (line.trim() === "") { i++; continue; }

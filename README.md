@@ -4,7 +4,7 @@
 
 How AgentChat looks in the browser (multi-tab chat, Session and CLI sidebar, command preview, scheduler).
 
-![AgentChat UI screenshot](static/agentchat-ui-screenshot.png)
+![AgentChat UI screenshot](static/agentchat-ui-screenshot.png) 
 
 Self-hosted **FastAPI** app with a browser chat interface for the Cursor **`agent`** CLI: multiple tabs, per-session workspaces with **AGENTS.md**, command preview, and optional **scheduled** runs (APScheduler). Use it to chat with the same CLI flow you use in the terminal, without leaving the browser.
 

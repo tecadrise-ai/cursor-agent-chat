@@ -232,6 +232,17 @@
       padding-bottom: 9px;
       box-shadow: 0 -2px 0 var(--brand-600) inset;
     }
+    .tab.busy {
+      border-color: var(--brand-300);
+    }
+    .tab-running-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--brand-500);
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.14);
+      flex: 0 0 auto;
+    }
     .tab-title { overflow: hidden; text-overflow: ellipsis; }
     .toolbar {
       padding: 12px 14px 16px;
@@ -271,7 +282,7 @@
     }
     .config-pane textarea {
       resize: vertical;
-      min-height: 72px;
+      min-height: 100px;
       max-height: 220px;
       background: var(--white);
     }
@@ -438,6 +449,60 @@
     .bubble.agent .bubble-text {
       padding: 12px 14px 16px;
       line-height: 1.5;
+      white-space: normal;
+    }
+    .bubble.agent .bubble-text h1,
+    .bubble.agent .bubble-text h2,
+    .bubble.agent .bubble-text h3,
+    .bubble.agent .bubble-text h4 {
+      margin: 0.8em 0 0.3em;
+      line-height: 1.3;
+    }
+    .bubble.agent .bubble-text h1 { font-size: 1.3em; }
+    .bubble.agent .bubble-text h2 { font-size: 1.15em; }
+    .bubble.agent .bubble-text h3 { font-size: 1.05em; }
+    .bubble.agent .bubble-text h4 { font-size: 1em; }
+    .bubble.agent .bubble-text p { margin: 0.5em 0; }
+    .bubble.agent .bubble-text ul,
+    .bubble.agent .bubble-text ol {
+      margin: 0.4em 0;
+      padding-left: 1.5em;
+    }
+    .bubble.agent .bubble-text li { margin: 0.15em 0; }
+    .bubble.agent .bubble-text code {
+      background: rgba(0,0,0,0.06);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+    .bubble.agent .bubble-text pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 10px 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 0.5em 0;
+    }
+    .bubble.agent .bubble-text pre code {
+      background: none;
+      padding: 0;
+      font-size: 0.85em;
+      color: inherit;
+    }
+    .bubble.agent .bubble-text hr {
+      border: none;
+      border-top: 1px solid #ddd;
+      margin: 0.8em 0;
+    }
+    .bubble.agent .bubble-text blockquote {
+      border-left: 3px solid var(--accent);
+      margin: 0.5em 0;
+      padding: 0.2em 0 0.2em 0.8em;
+      color: #555;
+    }
+    .bubble.agent .bubble-text a {
+      color: var(--accent);
+      text-decoration: underline;
     }
     .bubble.user {
       position: relative;
@@ -850,6 +915,11 @@
                     <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
                   </svg>
                 </button>
+                <button type="button" class="secondary icon-btn preview-icon-accent" id="btnOpenAssets" disabled aria-label="Open attachments folder in file manager" title="Open attachments folder (Cursor assets) in Explorer">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                  </svg>
+                </button>
                 <button type="button" class="secondary icon-btn preview-icon-danger" id="btnDeleteSession" disabled aria-label="Delete this session" title="Delete session and workspace folder">
                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M3 6h18"/>
@@ -955,7 +1025,9 @@
 
   <script>
     const API = "";
-    const DEFAULT_PREFIX = "agent -p --trust --yolo --approve-mcps --model auto";
+    let DEFAULT_PREFIX = "";
+    let DEFAULT_SCHEDULE = "interval:15m";
+    const CLIENT_ID_KEY = "agentchat_client_id_v1";
 
     const el = (id) => document.getElementById(id);
     const backdrop = el("backdrop");
@@ -968,10 +1040,43 @@
     let previewDebounce = null;
     let previewGen = 0;
     let schedulerPollTimer = null;
-    let manualSendBusy = false;
 
-    function quoteCmdFragment(s) {
-      return '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+    function getClientId() {
+      let id = sessionStorage.getItem(CLIENT_ID_KEY);
+      if (!id) {
+        id = "client_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+        sessionStorage.setItem(CLIENT_ID_KEY, id);
+      }
+      return id;
+    }
+
+    function withClientId(path) {
+      if (!path.startsWith("/api/state")) return path;
+      const sep = path.includes("?") ? "&" : "?";
+      return path + sep + "client_id=" + encodeURIComponent(getClientId());
+    }
+
+    function cliTemplateTail() {
+      if (!DEFAULT_PREFIX) return "";
+      const marker = ' --resume "{chat_id}" --workspace "{workspace}"';
+      const idx = DEFAULT_PREFIX.indexOf(marker);
+      return idx >= 0 ? DEFAULT_PREFIX.slice(idx) : "";
+    }
+
+    function normalizeCliPrefixValue(v) {
+      const s = (v || "").trim();
+      if (!s) return DEFAULT_PREFIX;
+      if (s.includes("{chat_id}") || s.includes("{workspace}")) return s;
+      if (/\s--resume\s/.test(s) || /\s--workspace\s/.test(s)) return s;
+      const tail = cliTemplateTail();
+      if (tail && s.startsWith("agent ")) return s + tail;
+      return s;
+    }
+
+    function renderCliPrefixTemplate(prefix, chatId, workspace) {
+      return normalizeCliPrefixValue(prefix)
+        .replaceAll("{chat_id}", chatId || "—")
+        .replaceAll("{workspace}", workspace || "—");
     }
 
     /** Close only when press+release both hit the backdrop (avoids closing after text select that ends on backdrop). */
@@ -1016,13 +1121,11 @@
     async function refreshCmdPreview() {
       const gen = ++previewGen;
       const tab = ensureActiveTab();
-      const prefix = el("cliPrefix").value.trim() || DEFAULT_PREFIX;
+      const prefix = normalizeCliPrefixValue(el("cliPrefix").value);
       const msgRaw = el("input").value.trim();
-      const tail = msgRaw ? quoteCmdFragment(msgRaw) : "<message>";
 
       if (!tab.slug || !tab.chatId) {
-        el("cmdPreview").textContent =
-          prefix + " --resume \u2014 --workspace \u2014 " + tail;
+        el("cmdPreview").textContent = renderCliPrefixTemplate(prefix, "—", "—");
         tab.cmdPreview = el("cmdPreview").textContent;
         return;
       }
@@ -1106,14 +1209,15 @@
         slug: null,
         title: title || "Chat",
         chatId: "",
-        cliPrefix: inherit && inherit.cliPrefix ? inherit.cliPrefix : DEFAULT_PREFIX,
+        cliPrefix: normalizeCliPrefixValue(inherit && inherit.cliPrefix ? inherit.cliPrefix : DEFAULT_PREFIX),
         cmdPreview: "\u2014",
         messages: [],
         schedulerEnabled: false,
-        schedule: "interval:15m",
+        schedule: DEFAULT_SCHEDULE,
         schedulerPrompt: "",
         schedulerNextRunDisplay: null,
         schedulerAgentBusy: false,
+        manualAgentBusy: false,
       };
     }
 
@@ -1123,17 +1227,18 @@
         slug: t.slug || null,
         title: t.title || "Chat",
         chatId: t.chatId || "",
-        cliPrefix: t.cliPrefix || DEFAULT_PREFIX,
+        cliPrefix: normalizeCliPrefixValue(t.cliPrefix || DEFAULT_PREFIX),
         cmdPreview: t.cmdPreview != null && t.cmdPreview !== "" ? t.cmdPreview : "\u2014",
         messages: Array.isArray(t.messages) ? t.messages : [],
         schedulerEnabled: !!t.schedulerEnabled,
-        schedule: t.schedule && String(t.schedule).trim() ? String(t.schedule).trim() : "interval:15m",
+        schedule: t.schedule && String(t.schedule).trim() ? String(t.schedule).trim() : DEFAULT_SCHEDULE,
         schedulerPrompt: t.schedulerPrompt != null ? String(t.schedulerPrompt) : "",
         schedulerNextRunDisplay:
           t.schedulerNextRunDisplay != null && String(t.schedulerNextRunDisplay).trim() !== ""
             ? String(t.schedulerNextRunDisplay).trim()
             : null,
         schedulerAgentBusy: !!t.schedulerAgentBusy,
+        manualAgentBusy: false,
       };
     }
 
@@ -1202,7 +1307,7 @@
     function openChatScheduleModal() {
       const tab = ensureActiveTab();
       if (!tab.slug) return;
-      const sched = tab.schedule || "interval:15m";
+      const sched = tab.schedule || DEFAULT_SCHEDULE;
       if (sched.startsWith("interval:")) {
         el("chat-schedule-type").value = "interval";
         const valStr = sched.replace("interval:", "");
@@ -1301,7 +1406,7 @@
     }
 
     async function apiGet(path) {
-      const r = await fetch(API + path);
+      const r = await fetch(API + withClientId(path));
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         throw new Error(httpErrorMessage(r, data));
@@ -1310,6 +1415,9 @@
     }
 
     async function apiPost(path, body) {
+      if (path === "/api/persist") {
+        body = { client_id: getClientId(), ...body };
+      }
       const r = await fetch(API + path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1320,6 +1428,57 @@
         throw new Error(httpErrorMessage(r, data));
       }
       return data;
+    }
+
+    async function loadUiConfig() {
+      const data = await apiGet("/api/config");
+      DEFAULT_PREFIX = String(data.default_cli_prefix || "").trim();
+      DEFAULT_SCHEDULE = String(data.default_schedule || "interval:15m").trim() || "interval:15m";
+      if (!DEFAULT_PREFIX) {
+        throw new Error("Server did not provide default_cli_prefix");
+      }
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = String(reader.result || "");
+          const idx = dataUrl.indexOf(",");
+          resolve(idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl);
+        };
+        reader.onerror = () => reject(reader.error || new Error("Could not read file"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function insertAtCursor(textarea, text) {
+      const start = textarea.selectionStart ?? textarea.value.length;
+      const end = textarea.selectionEnd ?? textarea.value.length;
+      const before = textarea.value.slice(0, start);
+      const after = textarea.value.slice(end);
+      const needsLead = before && !/\s$/.test(before) ? " " : "";
+      const needsTail = after && !/^\s/.test(after) ? " " : "";
+      const insert = needsLead + text + needsTail;
+      textarea.value = before + insert + after;
+      const pos = before.length + insert.length;
+      textarea.selectionStart = pos;
+      textarea.selectionEnd = pos;
+      textarea.focus();
+    }
+
+    async function uploadClipboardFileForActiveTab(file) {
+      const tab = ensureActiveTab();
+      if (!tab.slug) {
+        throw new Error("Create a named session first (+ New chat).");
+      }
+      const base64 = await fileToBase64(file);
+      return await apiPost("/api/inbox-upload", {
+        slug: tab.slug,
+        filename: file.name || "",
+        content_type: file.type || "",
+        data_base64: base64,
+      });
     }
 
     function promptSessionName(suggested) {
@@ -1388,6 +1547,10 @@
       return t;
     }
 
+    function getTabById(id) {
+      return state.tabs.find((x) => x.id === id) || null;
+    }
+
     function ensureActiveTab() {
       let t = getActiveTab();
       if (!t) {
@@ -1399,8 +1562,12 @@
       return t;
     }
 
+    function isTabBusy(tab) {
+      return !!(tab && (tab.manualAgentBusy || (tab.slug && tab.schedulerAgentBusy)));
+    }
+
     function snapshotFieldsToTab(tab) {
-      tab.cliPrefix = el("cliPrefix").value.trim() || DEFAULT_PREFIX;
+      tab.cliPrefix = normalizeCliPrefixValue(el("cliPrefix").value);
       tab.cmdPreview = el("cmdPreview").textContent || "\u2014";
       tab.schedulerEnabled = el("schedEnabledToggle").checked;
       tab.schedulerPrompt = el("schedulerPrompt").value;
@@ -1445,8 +1612,9 @@
       el("schedulerPrompt").value = tab.schedulerPrompt != null ? tab.schedulerPrompt : "";
       el("btnAgentsMd").disabled = !tab.slug;
       el("btnOpenWorkspace").disabled = !tab.slug;
+      el("btnOpenAssets").disabled = !tab.slug;
       el("btnDeleteSession").disabled = !tab.slug;
-      el("cliPrefix").value = tab.cliPrefix || DEFAULT_PREFIX;
+      el("cliPrefix").value = normalizeCliPrefixValue(tab.cliPrefix || DEFAULT_PREFIX);
       renderMessages(tab.messages);
       await refreshCmdPreview();
       scheduleScrollMessagesToEnd();
@@ -1459,8 +1627,7 @@
 
     function applyGlobalBusyUi() {
       const tab = ensureActiveTab();
-      const schedulerBusy = !!(tab.slug && tab.schedulerAgentBusy);
-      const b = manualSendBusy || schedulerBusy;
+      const b = isTabBusy(tab);
       el("btnSend").disabled = b;
       el("btnNewChat").disabled = b;
       el("schedEnabledToggle").disabled = b || !tab.slug;
@@ -1468,6 +1635,7 @@
       el("schedulerPrompt").disabled = b || !tab.slug;
       el("btnAgentsMd").disabled = b || !tab.slug;
       el("btnOpenWorkspace").disabled = b || !tab.slug;
+      el("btnOpenAssets").disabled = b || !tab.slug;
       el("btnDeleteSession").disabled = b || !tab.slug;
       el("statusSpinner").hidden = !b;
       if (b) {
@@ -1526,6 +1694,7 @@
           const active = getActiveTab();
           renderMessages(active.messages);
           updateSchedNextRunLabel(active);
+          renderTabBar();
         }
         applyGlobalBusyUi();
         if (!state.tabs.some((x) => x.schedulerEnabled && x.slug)) {
@@ -1543,6 +1712,79 @@
       schedulerPollTimer = setInterval(() => void pullSchedulerUpdates(), 2000);
     }
 
+    function simpleMarkdownToHtml(raw) {
+      function esc(s) {
+        return s
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function inlineMarkdown(line) {
+        return line
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+          .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+          .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+          .replace(/_([^_]+)_/g, "<em>$1</em>")
+          .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      }
+      var lines = raw.split("\n");
+      var html = [];
+      var i = 0;
+      while (i < lines.length) {
+        var line = lines[i];
+        if (/^```/.test(line)) {
+          var lang = line.slice(3).trim();
+          var code = [];
+          i++;
+          while (i < lines.length && !/^```/.test(lines[i])) {
+            code.push(esc(lines[i]));
+            i++;
+          }
+          i++;
+          html.push("<pre><code" + (lang ? ' class="lang-' + esc(lang) + '"' : "") + ">" + code.join("\n") + "</code></pre>");
+          continue;
+        }
+        if (/^####\s/.test(line)) { html.push("<h4>" + inlineMarkdown(esc(line.slice(5))) + "</h4>"); i++; continue; }
+        if (/^###\s/.test(line)) { html.push("<h3>" + inlineMarkdown(esc(line.slice(4))) + "</h3>"); i++; continue; }
+        if (/^##\s/.test(line)) { html.push("<h2>" + inlineMarkdown(esc(line.slice(3))) + "</h2>"); i++; continue; }
+        if (/^#\s/.test(line)) { html.push("<h1>" + inlineMarkdown(esc(line.slice(2))) + "</h1>"); i++; continue; }
+        if (/^---\s*$/.test(line)) { html.push("<hr>"); i++; continue; }
+        if (/^>\s?/.test(line)) {
+          var bq = [];
+          while (i < lines.length && /^>\s?/.test(lines[i])) {
+            bq.push(inlineMarkdown(esc(lines[i].replace(/^>\s?/, ""))));
+            i++;
+          }
+          html.push("<blockquote><p>" + bq.join("<br>") + "</p></blockquote>");
+          continue;
+        }
+        if (/^\d+\.\s/.test(line)) {
+          var items = [];
+          while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
+            items.push("<li>" + inlineMarkdown(esc(lines[i].replace(/^\d+\.\s/, ""))) + "</li>");
+            i++;
+          }
+          html.push("<ol>" + items.join("") + "</ol>");
+          continue;
+        }
+        if (/^[-*]\s/.test(line)) {
+          var items = [];
+          while (i < lines.length && /^[-*]\s/.test(lines[i])) {
+            items.push("<li>" + inlineMarkdown(esc(lines[i].replace(/^[-*]\s/, ""))) + "</li>");
+            i++;
+          }
+          html.push("<ul>" + items.join("") + "</ul>");
+          continue;
+        }
+        if (line.trim() === "") { i++; continue; }
+        html.push("<p>" + inlineMarkdown(esc(line)) + "</p>");
+        i++;
+      }
+      return html.join("\n");
+    }
+
     function renderMessages(msgs) {
       messagesEl.innerHTML = "";
       for (const m of msgs) {
@@ -1558,7 +1800,11 @@
         }
         const textEl = document.createElement("div");
         textEl.className = "bubble-text";
-        textEl.textContent = m.text;
+        if (m.role === "agent") {
+          textEl.innerHTML = simpleMarkdownToHtml(m.text || "");
+        } else {
+          textEl.textContent = m.text;
+        }
         div.appendChild(textEl);
         messagesEl.appendChild(div);
       }
@@ -1576,7 +1822,7 @@
         cmdPreview: t.cmdPreview,
         messages: t.messages,
         schedulerEnabled: !!t.schedulerEnabled,
-        schedule: t.schedule && String(t.schedule).trim() ? String(t.schedule).trim() : "interval:15m",
+        schedule: t.schedule && String(t.schedule).trim() ? String(t.schedule).trim() : DEFAULT_SCHEDULE,
         schedulerPrompt: t.schedulerPrompt != null ? String(t.schedulerPrompt) : "",
       }));
       await apiPost("/api/persist", {
@@ -1590,9 +1836,18 @@
       tabBar.innerHTML = "";
       for (const tab of state.tabs) {
         const wrap = document.createElement("div");
-        wrap.className = "tab" + (tab.id === state.activeTabId ? " active" : "");
+        wrap.className =
+          "tab" +
+          (tab.id === state.activeTabId ? " active" : "") +
+          (isTabBusy(tab) ? " busy" : "");
         wrap.setAttribute("role", "tab");
         wrap.setAttribute("aria-selected", tab.id === state.activeTabId ? "true" : "false");
+        if (isTabBusy(tab)) {
+          const dot = document.createElement("span");
+          dot.className = "tab-running-dot";
+          dot.title = "Agent running in this tab";
+          wrap.appendChild(dot);
+        }
         const title = document.createElement("span");
         title.className = "tab-title";
         title.textContent = tab.title;
@@ -1647,23 +1902,34 @@
       await persist();
     }
 
-    async function appendToActive(role, text, isError) {
-      const tab = ensureActiveTab();
+    async function appendToTab(tabId, role, text, isError) {
+      const tab = getTabById(tabId);
+      if (!tab) return;
       const entry = { role, text, err: !!isError };
       if (role === "user") entry.ts = formatLocalMessageStamp();
       tab.messages.push(entry);
-      renderMessages(tab.messages);
+      if (state.activeTabId === tab.id) {
+        renderMessages(tab.messages);
+      }
       await persist();
     }
 
-    function setBusy(b) {
-      manualSendBusy = b;
+    async function appendToActive(role, text, isError) {
+      await appendToTab(ensureActiveTab().id, role, text, isError);
+    }
+
+    function setTabBusy(tabId, b) {
+      const tab = getTabById(tabId);
+      if (!tab) return;
+      tab.manualAgentBusy = !!b;
+      renderTabBar();
       applyGlobalBusyUi();
     }
 
     async function initChatUi() {
       try {
         status.textContent = "Loading\u2026";
+        await loadUiConfig();
         await loadStateFromServer();
         status.textContent = "";
       } catch (e) {
@@ -1815,6 +2081,16 @@
       }
     });
 
+    el("btnOpenAssets").addEventListener("click", async () => {
+      const tab = ensureActiveTab();
+      if (!tab.slug) return;
+      try {
+        await apiPost("/api/open-assets", { slug: tab.slug });
+      } catch (e) {
+        status.textContent = "Could not open assets folder: " + e.message;
+      }
+    });
+
     el("btnDeleteSession").addEventListener("click", async () => {
       const tab = ensureActiveTab();
       if (!tab.slug) return;
@@ -1829,7 +2105,7 @@
       closeAgentsMdOverlay();
       closeChatScheduleModal();
       cancelScheduledCmdPreview();
-      setBusy(true);
+      setTabBusy(tab.id, true);
       try {
         await apiPost("/api/delete-session", { slug: tab.slug });
         const idx = state.tabs.findIndex((x) => x.id === tab.id);
@@ -1852,7 +2128,7 @@
       } catch (e) {
         status.textContent = "Delete failed: " + e.message;
       } finally {
-        setBusy(false);
+        setTabBusy(tab.id, false);
       }
     });
     el("agentsMdCancel").addEventListener("click", () => closeAgentsMdOverlay());
@@ -1893,7 +2169,7 @@
       }
       const sessionName = String(entered).replace(/\s+/g, " ").trim() || "Unnamed session";
 
-      setBusy(true);
+      setTabBusy(cur.id, true);
       try {
         const res = await apiPost("/api/new-chat", {
           session_name: sessionName,
@@ -1907,10 +2183,11 @@
           cliPrefix: DEFAULT_PREFIX,
           cmdPreview: "\u2014",
           schedulerEnabled: false,
-          schedule: "interval:15m",
+          schedule: DEFAULT_SCHEDULE,
           schedulerPrompt: "",
           schedulerNextRunDisplay: null,
           schedulerAgentBusy: false,
+          manualAgentBusy: false,
         };
         const disposableDraft =
           !cur.slug && (!cur.messages || cur.messages.length === 0);
@@ -1935,12 +2212,13 @@
       } catch (e) {
         await appendToActive("agent", "new-chat failed: " + e.message, true);
       } finally {
-        setBusy(false);
+        setTabBusy(cur.id, false);
       }
     });
 
     el("btnSend").addEventListener("click", async () => {
       const tab = getActiveTab();
+      const tabId = tab && tab.id;
       snapshotFieldsToTab(tab);
       if (!tab.slug) {
         status.textContent = "Create a named session first (+ New chat).";
@@ -1956,11 +2234,13 @@
 
       cancelScheduledCmdPreview();
 
-      await appendToActive("user", text, false);
+      await appendToTab(tabId, "user", text, false);
       el("input").value = "";
-      setBusy(true);
-      el("cmdPreview").textContent = "\u2026";
+      setTabBusy(tabId, true);
       tab.cmdPreview = "\u2026";
+      if (state.activeTabId === tabId) {
+        el("cmdPreview").textContent = "\u2026";
+      }
 
       try {
         const data = await apiPost("/api/chat", {
@@ -1969,19 +2249,24 @@
           slug: tab.slug,
           message: text,
         });
-        el("cmdPreview").textContent = data.preview_cmd || "\u2014";
-        tab.cmdPreview = data.preview_cmd || "\u2014";
+        const targetTab = getTabById(tabId);
+        if (targetTab) {
+          targetTab.cmdPreview = data.preview_cmd || "\u2014";
+          if (state.activeTabId === tabId) {
+            el("cmdPreview").textContent = targetTab.cmdPreview;
+          }
+        }
         let body = data.stdout || "(empty stdout)";
         if (data.stderr) body += "\n\n--- stderr ---\n" + data.stderr;
         if (data.returncode !== 0) {
-          await appendToActive("agent", "exit " + data.returncode + "\n\n" + body, true);
+          await appendToTab(tabId, "agent", "exit " + data.returncode + "\n\n" + body, true);
         } else {
-          await appendToActive("agent", body, false);
+          await appendToTab(tabId, "agent", body, false);
         }
       } catch (e) {
-        await appendToActive("agent", "request failed: " + e.message, true);
+        await appendToTab(tabId, "agent", "request failed: " + e.message, true);
       } finally {
-        setBusy(false);
+        setTabBusy(tabId, false);
       }
     });
 
@@ -1989,6 +2274,30 @@
       if (ev.key === "Enter" && !ev.shiftKey) {
         ev.preventDefault();
         el("btnSend").click();
+      }
+    });
+
+    el("input").addEventListener("paste", async (ev) => {
+      const items = Array.from(ev.clipboardData?.items || []);
+      const files = items
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      if (!files.length) return;
+      ev.preventDefault();
+      const input = el("input");
+      try {
+        for (const file of files) {
+          const res = await uploadClipboardFileForActiveTab(file);
+          insertAtCursor(input, res.reference);
+        }
+        scheduleRefreshCmdPreview();
+        status.textContent =
+          files.length === 1
+            ? "Clipboard file added to inbox."
+            : "Clipboard files added to inbox.";
+      } catch (e) {
+        status.textContent = "Paste upload failed: " + e.message;
       }
     });
 

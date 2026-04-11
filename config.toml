@@ -17,15 +17,13 @@ chats_dir = "chats"
 session_file = "session.json"
 app_state_file = "_app_state.json"
 agents_md_file = "AGENTS.md"
+human_md_file = "HUMAN.md"
+attachments_md_file = "ATTACHMENTS.md"
 
 [defaults]
-cli_prefix = "agent -p --trust --yolo --approve-mcps --model auto"
-agents_md_default = "You are a helpfull virtual assistant."
+cli_prefix = "agent -p --trust --yolo --approve-mcps --model auto --resume \"{chat_id}\" --workspace \"{workspace}\" \"Read AGENTS.md and HUMAN.md first. Follow HUMAN.md first as the current task. See ATTACHMENTS.md for referenced files. \""
+agents_md_default = "Read HUMAN.md first and treat it as the current task. Use AGENTS.md only as standing rules and background."
 schedule = "interval:15m"
-
-# When AGENTS.md exists, these argv are inserted before the user message
-[cli_trailing]
-instructions_argv = ["read", "instructions", "from", "AGENTS.md"]
 
 [agent]
 create_chat_argv = ["agent", "create-chat"]

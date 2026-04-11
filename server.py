@@ -5,7 +5,9 @@ Each named session uses ./chats/<slug>/ as workspace; session.json + _app_state.
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import os
 import re
 import shlex
@@ -32,61 +34,27 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.toml"
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
-    out = dict(base)
-    for k, v in override.items():
-        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-            out[k] = _deep_merge(out[k], v)
-        else:
-            out[k] = v
-    return out
-
-
-def _default_config() -> dict:
-    return {
-        "server": {"host": "127.0.0.1", "port": 8765, "log_level": "info"},
-        "app": {"title": "Agent Chat CLI Test"},
-        "cors": {"allow_origins": ["*"]},
-        "paths": {
-            "static_dir": "static",
-            "chats_dir": "chats",
-            "session_file": "session.json",
-            "app_state_file": "_app_state.json",
-            "agents_md_file": "AGENTS.md",
-        },
-        "defaults": {
-            "cli_prefix": "agent -p --trust --yolo --approve-mcps --model auto",
-            "agents_md_default": "You are a helpfull virtual assistant.",
-            "schedule": "interval:15m",
-        },
-        "cli_trailing": {"instructions_argv": ["read", "instructions", "from", "AGENTS.md"]},
-        "agent": {"create_chat_argv": ["agent", "create-chat"]},
-        "scheduler": {"misfire_grace_time": 43200},
-        "timeouts": {"agent_seconds": 3600, "create_chat_seconds": 120},
-    }
-
-
 def _load_config() -> dict:
-    base = _default_config()
     if not CONFIG_PATH.is_file():
-        return base
+        raise RuntimeError(f"Missing required config file: {CONFIG_PATH}")
     try:
         raw = CONFIG_PATH.read_bytes().decode("utf-8")
         if sys.version_info >= (3, 11):
             import tomllib
 
-            user = tomllib.loads(raw)
+            cfg = tomllib.loads(raw)
         else:
             import tomli
 
-            user = tomli.loads(raw)
+            cfg = tomli.loads(raw)
     except Exception as e:
-        print(f"Warning: could not load {CONFIG_PATH}: {e} — using defaults", file=sys.stderr)
-        return base
-    return _deep_merge(base, user)
+        raise RuntimeError(f"Could not load required config file {CONFIG_PATH}: {e}") from e
+    if not isinstance(cfg, dict):
+        raise RuntimeError(f"Config file {CONFIG_PATH} did not parse to a table")
+    return cfg
 
 
-def _coerce_str_list(val, fallback: list[str]) -> list[str]:
+def _coerce_str_list(val, field_name: str) -> list[str]:
     if isinstance(val, (list, tuple)):
         out: list[str] = []
         for x in val:
@@ -99,10 +67,10 @@ def _coerce_str_list(val, fallback: list[str]) -> list[str]:
         try:
             parts = shlex.split(val.strip(), posix=(sys.platform != "win32"))
         except ValueError:
-            return list(fallback)
+            raise RuntimeError(f"Config field {field_name} contains invalid shell syntax") from None
         if parts:
             return parts
-    return list(fallback)
+    raise RuntimeError(f"Config field {field_name} must be a non-empty string or list of strings")
 
 
 def _coerce_cors_origins(val) -> list[str]:
@@ -114,16 +82,34 @@ def _coerce_cors_origins(val) -> list[str]:
     return ["*"]
 
 
-_FB_INSTR = ["read", "instructions", "from", "AGENTS.md"]
-_FB_CREATE = ["agent", "create-chat"]
-
+_FB_INSTR = [
+    "read",
+    "AGENTS.md",
+    "and",
+    "HUMAN.md.",
+    "If",
+    "ATTACHMENTS.md",
+    "exists,",
+    "use",
+    "the",
+    "referenced",
+    "files",
+    "listed",
+    "there.",
+    "Follow",
+    "HUMAN.md",
+    "first",
+    "as",
+    "the",
+    "current",
+    "task.",
+]
 _CFG = _load_config()
 _SERVER = _CFG["server"]
 _APP = _CFG["app"]
 _CORS = _CFG["cors"]
 _PATHS = _CFG["paths"]
 _DEFAULTS = _CFG["defaults"]
-_CLI_TRAIL = _CFG["cli_trailing"]
 _AGENT_CMD = _CFG["agent"]
 _SCHED = _CFG["scheduler"]
 _TO = _CFG["timeouts"]
@@ -138,11 +124,12 @@ CHATS = ROOT / str(_PATHS["chats_dir"])
 SESSION_NAME = str(_PATHS["session_file"])
 APP_STATE_NAME = str(_PATHS["app_state_file"])
 AGENTS_MD_NAME = str(_PATHS["agents_md_file"])
+HUMAN_MD_NAME = str(_PATHS.get("human_md_file", "HUMAN.md"))
+ATTACHMENTS_MD_NAME = str(_PATHS.get("attachments_md_file", "ATTACHMENTS.md"))
 DEFAULT_AGENTS_MD = str(_DEFAULTS["agents_md_default"])
 DEFAULT_CLI = str(_DEFAULTS["cli_prefix"])
 DEFAULT_SCHEDULE = str(_DEFAULTS["schedule"])
-AGENTS_MD_ARGV = tuple(_coerce_str_list(_CLI_TRAIL.get("instructions_argv"), _FB_INSTR))
-CREATE_CHAT_ARGV = _coerce_str_list(_AGENT_CMD.get("create_chat_argv"), _FB_CREATE)
+CREATE_CHAT_ARGV = _coerce_str_list(_AGENT_CMD["create_chat_argv"], "agent.create_chat_argv")
 SCHEDULER_MISFIRE_GRACE = int(_SCHED["misfire_grace_time"])
 TIMEOUT_AGENT_S = int(_TO["agent_seconds"])
 TIMEOUT_CREATE_CHAT_S = int(_TO["create_chat_seconds"])
@@ -198,6 +185,223 @@ def _write_json_atomic(path: Path, data: dict) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def _human_md_path(ws: Path) -> Path:
+    return ws / HUMAN_MD_NAME
+
+
+def _attachments_md_path(ws: Path) -> Path:
+    return ws / ATTACHMENTS_MD_NAME
+
+
+CURSOR_PROJECTS_BASE = Path.home() / ".cursor" / "projects"
+
+
+def _cursor_project_name(ws: Path) -> str:
+    s = str(ws.resolve())
+    s = s.replace(":\\", "-").replace("\\", "-").replace("/", "-")
+    return s.rstrip("-")
+
+
+def _cursor_assets_dir(ws: Path) -> Path:
+    name = _cursor_project_name(ws)
+    p = CURSOR_PROJECTS_BASE / name / "assets"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _attachment_prefix_for_content_type(content_type: str, filename: str) -> str:
+    ct = (content_type or "").lower()
+    name = (filename or "").lower()
+    if ct.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp|bmp)$", name):
+        return "screenshot"
+    if ct == "application/pdf" or name.endswith(".pdf"):
+        return "pdf"
+    return "file"
+
+
+def _attachment_suffix_for_upload(content_type: str, filename: str) -> str:
+    raw_name = (filename or "").strip()
+    suffix = Path(raw_name).suffix[:16]
+    if suffix and re.fullmatch(r"\.[A-Za-z0-9]+", suffix):
+        return suffix.lower()
+    ct = (content_type or "").lower()
+    custom = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/bmp": ".bmp",
+        "application/pdf": ".pdf",
+        "text/plain": ".txt",
+    }
+    if ct in custom:
+        return custom[ct]
+    guessed = mimetypes.guess_extension(ct) if ct else None
+    if guessed and re.fullmatch(r"\.[A-Za-z0-9]+", guessed):
+        return guessed.lower()
+    return ".bin"
+
+
+_READABLE_IMAGE_MIMES = frozenset({
+    "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
+})
+_READABLE_PDF_MIMES = frozenset({"application/pdf"})
+
+
+def _attachment_access_hint(mime: str) -> str:
+    m = (mime or "").lower()
+    if m in _READABLE_IMAGE_MIMES:
+        return "Use the **Read** tool on this file to view the image."
+    if m in _READABLE_PDF_MIMES:
+        return "Use the **Read** tool on this file to extract the PDF text."
+    if m.startswith("text/"):
+        return "Use the **Read** tool on this file to read the contents."
+    return "Binary file, use the **Read** tool if the format is supported."
+
+
+def _next_attachment_token(ws: Path, prefix: str) -> str:
+    assets = _cursor_assets_dir(ws)
+    rx = re.compile(rf"^{re.escape(prefix)}(\d+)(?:\.[^.]+)?$", re.I)
+    n = 1
+    for p in assets.iterdir():
+        if not p.is_file():
+            continue
+        m = rx.match(p.name)
+        if m:
+            try:
+                n = max(n, int(m.group(1)) + 1)
+            except ValueError:
+                pass
+    return f"{prefix}{n}"
+
+
+def _write_human_md(ws: Path, prompt: str, *, source: str) -> None:
+    text = (prompt or "").strip()
+    path = _human_md_path(ws)
+    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    body = (
+        "# HUMAN.md\n\n"
+        "Current task input for this chat.\n\n"
+        f"- Source: {source}\n"
+        f"- Updated: {stamp}\n\n"
+        "## Priority\n"
+        "Treat this file as the leading instruction for the current run.\n"
+        "If AGENTS.md conflicts with HUMAN.md, follow HUMAN.md.\n\n"
+        "## Task\n\n"
+        f"{text}\n"
+    )
+    path.write_text(body, encoding="utf-8")
+
+
+def _prepare_run_context(ws: Path, prompt: str, *, source: str) -> None:
+    _write_human_md(ws, prompt, source=source)
+    _write_attachments_md(ws, prompt)
+
+
+def _extract_attachment_refs(text: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in re.finditer(r"(?<!\w)@([A-Za-z][A-Za-z0-9_-]*)", text or ""):
+        token = m.group(1)
+        low = token.lower()
+        if low not in seen:
+            seen.add(low)
+            out.append(token)
+    return out
+
+
+def _resolve_attachment_token(ws: Path, token: str) -> Path | None:
+    assets = _cursor_assets_dir(ws)
+    exact = [p for p in assets.iterdir() if p.is_file() and p.stem.lower() == token.lower()]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise RuntimeError(f"Multiple assets files match @{token}")
+    return None
+
+
+def _write_attachments_md(ws: Path, prompt: str) -> None:
+    path = _attachments_md_path(ws)
+    refs = _extract_attachment_refs(prompt)
+    if not refs:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    lines = [
+        "# ATTACHMENTS.md",
+        "",
+        "Referenced files for this run only.",
+        "",
+        "## How to access",
+        "",
+        "Use your **Read** tool with the absolute file path shown below.",
+        "The Read tool supports images (png, jpg, gif, webp) and PDFs natively.",
+        "Do NOT use shell commands to open these files.",
+        "",
+        "## Files",
+        "",
+    ]
+    any_resolved = False
+    for token in refs:
+        resolved = _resolve_attachment_token(ws, token)
+        if resolved is None:
+            lines.append(f"- `@{token}` -> MISSING (not uploaded)")
+            continue
+        any_resolved = True
+        abs_path = str(resolved)
+        mime = mimetypes.guess_type(str(resolved.name))[0] or "application/octet-stream"
+        hint = _attachment_access_hint(mime)
+        lines.extend(
+            [
+                f"- `@{token}` -> `{abs_path}`",
+                f"  - type: `{mime}`",
+                f"  - size_bytes: {resolved.stat().st_size}",
+                f"  - access: {hint}",
+            ]
+        )
+    if not any_resolved:
+        lines.append("")
+        lines.append("No referenced files could be resolved.")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _sanitize_client_id(raw: str | None) -> str | None:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", s):
+        return None
+    return s
+
+
+def _legacy_app_state_path() -> Path:
+    return CHATS / APP_STATE_NAME
+
+
+def _app_state_path(client_id: str | None) -> Path:
+    cid = _sanitize_client_id(client_id)
+    if not cid:
+        return _legacy_app_state_path()
+    stem, suffix = os.path.splitext(APP_STATE_NAME)
+    return CHATS / f"{stem}.{cid}{suffix}"
+
+
+def _iter_app_state_paths() -> list[Path]:
+    root = _chats_dir()
+    stem, suffix = os.path.splitext(APP_STATE_NAME)
+    out: list[Path] = []
+    legacy = _legacy_app_state_path()
+    if legacy.is_file():
+        out.append(legacy)
+    for p in sorted(root.glob(f"{stem}.*{suffix}")):
+        if p.is_file():
+            out.append(p)
+    return out
 
 
 scheduler = BackgroundScheduler()
@@ -257,32 +461,56 @@ def _normalize_next_run_past_minute(local: datetime, schedule_str: str) -> datet
 
 def _append_scheduler_messages_and_save(slug: str, user_text: str, agent_text: str, is_err: bool) -> None:
     root = _chats_dir()
-    meta_path = CHATS / APP_STATE_NAME
-    meta = _read_json(meta_path)
-    if not meta or not isinstance(meta.get("tabs"), list):
-        return
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    tabs = meta["tabs"]
-    for i, t in enumerate(tabs):
-        if not isinstance(t, dict) or t.get("slug") != slug:
+    stamp_user = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+    stamp_agent = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+    appended = False
+    for meta_path in _iter_app_state_paths():
+        meta = _read_json(meta_path)
+        if not meta or not isinstance(meta.get("tabs"), list):
             continue
-        msgs = list(t.get("messages") or [])
-        stamp_user = time.strftime("%Y-%m-%d %H:%M", time.localtime())
-        msgs.append({"role": "user", "text": user_text, "ts": stamp_user})
-        stamp_agent = time.strftime("%Y-%m-%d %H:%M", time.localtime())
-        msgs.append({"role": "agent", "text": agent_text, "err": is_err, "ts": stamp_agent})
-        t["messages"] = msgs
-        tabs[i] = t
-        pdir = root / slug
-        if pdir.is_dir():
-            sess = _read_json(pdir / SESSION_NAME) or {}
-            sess["messages"] = msgs
-            sess["updated_at"] = now
-            _write_json_atomic(pdir / SESSION_NAME, sess)
-        break
-    meta["tabs"] = tabs
-    meta["saved_at"] = now
-    _write_json_atomic(meta_path, meta)
+        tabs = meta["tabs"]
+        changed = False
+        for i, t in enumerate(tabs):
+            if not isinstance(t, dict) or t.get("slug") != slug:
+                continue
+            msgs = list(t.get("messages") or [])
+            msgs.append({"role": "user", "text": user_text, "ts": stamp_user})
+            msgs.append({"role": "agent", "text": agent_text, "err": is_err, "ts": stamp_agent})
+            t["messages"] = msgs
+            tabs[i] = t
+            changed = True
+            appended = True
+            break
+        if changed:
+            meta["tabs"] = tabs
+            meta["saved_at"] = now
+            _write_json_atomic(meta_path, meta)
+
+    pdir = root / slug
+    if pdir.is_dir():
+        sess = _read_json(pdir / SESSION_NAME) or {}
+        msgs = list(sess.get("messages") or [])
+        if not appended:
+            msgs.append({"role": "user", "text": user_text, "ts": stamp_user})
+            msgs.append({"role": "agent", "text": agent_text, "err": is_err, "ts": stamp_agent})
+        else:
+            msgs = None
+            for meta_path in _iter_app_state_paths():
+                meta = _read_json(meta_path)
+                if not meta or not isinstance(meta.get("tabs"), list):
+                    continue
+                for t in meta["tabs"]:
+                    if isinstance(t, dict) and t.get("slug") == slug:
+                        msgs = list(t.get("messages") or [])
+                        break
+                if msgs is not None:
+                    break
+            if msgs is None:
+                msgs = list(sess.get("messages") or [])
+        sess["messages"] = msgs
+        sess["updated_at"] = now
+        _write_json_atomic(pdir / SESSION_NAME, sess)
 
 
 def execute_scheduled_chat(slug: str) -> None:
@@ -291,31 +519,33 @@ def execute_scheduled_chat(slug: str) -> None:
             return
         _scheduler_running_slugs.add(slug)
     try:
-        meta_path = CHATS / APP_STATE_NAME
-        meta = _read_json(meta_path)
-        if not meta:
-            return
-        tab = None
-        for t in meta.get("tabs") or []:
-            if isinstance(t, dict) and t.get("slug") == slug:
-                tab = t
-                break
-        if not tab or not tab.get("schedulerEnabled"):
-            return
-        prompt = (tab.get("schedulerPrompt") or "").strip()
-        if not prompt:
-            return
-        chat_id = (tab.get("chatId") or "").strip()
-        cli_prefix = tab.get("cliPrefix") or DEFAULT_CLI
-        if not chat_id:
-            return
         try:
             ws = _workspace_for_slug(slug)
         except ValueError:
             return
+        sess = _read_json(ws / SESSION_NAME)
+        if not sess or not sess.get("scheduler_enabled"):
+            return
+        prompt = (sess.get("scheduler_prompt") or "").strip()
+        if not prompt:
+            return
+        chat_id = (sess.get("chat_id") or "").strip()
+        cli_prefix = sess.get("cli_prefix") or DEFAULT_CLI
+        if not chat_id:
+            return
         if not ws.is_dir() or not (ws / SESSION_NAME).is_file():
             return
-        tail = _cli_trailing_argv_chat(ws, prompt)
+        try:
+            _prepare_run_context(ws, prompt, source="scheduler")
+        except (OSError, RuntimeError):
+            _append_scheduler_messages_and_save(
+                slug,
+                prompt,
+                "Could not prepare HUMAN.md or ATTACHMENTS.md for scheduled run.",
+                True,
+            )
+            return
+        tail = [] if _cli_prefix_uses_template(cli_prefix) else _cli_trailing_argv_chat(ws, prompt)
         try:
             args = _build_agent_argv(cli_prefix, chat_id, ws, tail)
         except ValueError:
@@ -450,10 +680,7 @@ def _sync_scheduler_from_tabs_payload(tabs: list[dict]) -> None:
 
 
 def _load_schedulers_from_disk() -> None:
-    meta = _read_json(CHATS / APP_STATE_NAME)
-    if not meta or not isinstance(meta.get("tabs"), list):
-        return
-    _sync_scheduler_from_tabs_payload(meta["tabs"])
+    _sync_scheduler_from_tabs_payload(_scan_disk_tabs())
 
 
 def _format_scheduler_next_display(schedule_str: str, next_run: datetime | None) -> str | None:
@@ -533,19 +760,31 @@ def _split_cli_prefix(prefix: str) -> list[str]:
     return shlex.split(s)
 
 
+def _cli_prefix_uses_template(prefix: str) -> bool:
+    s = prefix or ""
+    return "{chat_id}" in s or "{workspace}" in s
+
+
+def _expand_cli_prefix_template(prefix: str, chat_id: str, workspace: Path) -> str:
+    return (
+        (prefix or "")
+        .replace("{chat_id}", chat_id.strip())
+        .replace("{workspace}", str(workspace))
+    )
+
+
 def _build_agent_argv(
     cli_prefix: str,
     chat_id: str,
     workspace: Path,
     trailing: list[str],
 ) -> list[str]:
+    if _cli_prefix_uses_template(cli_prefix):
+        expanded = _expand_cli_prefix_template(cli_prefix, chat_id, workspace)
+        parts = shlex.split(expanded)
+        return parts + trailing
     parts = _split_cli_prefix(cli_prefix)
-    return parts + [
-        "--resume",
-        chat_id.strip(),
-        "--workspace",
-        str(workspace),
-    ] + trailing
+    return parts + ["--resume", chat_id.strip(), "--workspace", str(workspace)] + trailing
 
 
 def _argv_to_preview(argv: list[str]) -> str:
@@ -555,36 +794,36 @@ def _argv_to_preview(argv: list[str]) -> str:
 
 
 def _cli_trailing_argv_chat(ws: Path, user_message: str) -> list[str]:
-    u = user_message.strip()
-    if not (ws / AGENTS_MD_NAME).is_file():
-        return [u]
-    return list(AGENTS_MD_ARGV) + [u]
+    _ = user_message
+    if (ws / AGENTS_MD_NAME).is_file():
+        return list(_FB_INSTR)
+    return ["read", "HUMAN.md", "and", "follow", "it", "as", "the", "current", "task."]
 
 
 def _cli_trailing_argv_preview(ws: Path, user_message: str) -> list[str]:
-    u = (user_message or "").strip()
-    if not (ws / AGENTS_MD_NAME).is_file():
-        return [u if u else "<message>"]
-    if not u:
-        return list(AGENTS_MD_ARGV)
-    return list(AGENTS_MD_ARGV) + [u]
+    _ = user_message
+    return _cli_trailing_argv_chat(ws, "")
 
 
 def _run_agent(argv: list[str], *, cwd: str | None, timeout: int) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "PYTHONUTF8": "1"}
-    if sys.platform == "win32":
-        line = subprocess.list2cmdline(argv)
-        return subprocess.run(
-            line,
-            shell=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            cwd=cwd,
-            env=env,
-        )
+    if sys.platform == "win32" and argv:
+        exe = shutil.which(argv[0]) or argv[0]
+        resolved = [exe, *argv[1:]]
+        lower = str(exe).lower()
+        if lower.endswith(".cmd") or lower.endswith(".bat"):
+            line = subprocess.list2cmdline(resolved)
+            return subprocess.run(
+                ["cmd.exe", "/d", "/s", "/c", line],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                cwd=cwd,
+                env=env,
+            )
+        argv = resolved
     return subprocess.run(
         argv,
         capture_output=True,
@@ -674,6 +913,7 @@ class TabState(BaseModel):
 
 
 class PersistBody(BaseModel):
+    client_id: str = ""
     active_tab_id: str = ""
     tabs: list[TabState] = Field(default_factory=list)
 
@@ -706,6 +946,13 @@ class OpenWorkspaceBody(BaseModel):
     slug: str
 
 
+class InboxUploadBody(BaseModel):
+    slug: str
+    filename: str = ""
+    content_type: str = ""
+    data_base64: str
+
+
 class DeleteSessionBody(BaseModel):
     slug: str
 
@@ -718,10 +965,18 @@ def root():
     return FileResponse(index)
 
 
+@app.get("/api/config")
+def api_get_config():
+    return {
+        "default_cli_prefix": DEFAULT_CLI,
+        "default_schedule": DEFAULT_SCHEDULE,
+    }
+
+
 @app.get("/api/state")
-def api_get_state():
+def api_get_state(client_id: str = ""):
     _chats_dir()
-    meta_path = CHATS / APP_STATE_NAME
+    meta_path = _app_state_path(client_id)
     meta = _read_json(meta_path)
     if meta and isinstance(meta.get("tabs"), list) and meta["tabs"]:
         tabs: list[dict] = []
@@ -757,7 +1012,10 @@ def api_get_state():
     disk = _scan_disk_tabs()
     if disk:
         _enrich_tabs_scheduler_next_run(disk)
-        return {"tabs": disk, "active_tab_id": disk[0]["id"]}
+        active = disk[0]["id"]
+        if _sanitize_client_id(client_id):
+            _write_json_atomic(meta_path, {"version": 1, "active_tab_id": active, "tabs": disk})
+        return {"tabs": disk, "active_tab_id": active}
     d = _default_state()
     _write_json_atomic(meta_path, {"version": 1, **d})
     return d
@@ -796,7 +1054,7 @@ def api_persist(body: PersistBody):
             "tabs": serial_tabs,
             "saved_at": now,
         }
-        _write_json_atomic(CHATS / APP_STATE_NAME, meta)
+        _write_json_atomic(_app_state_path(body.client_id), meta)
         _sync_scheduler_from_tabs_payload(serial_tabs)
     except HTTPException:
         raise
@@ -845,6 +1103,11 @@ def api_new_chat(body: NewChatBody):
     }
     _write_json_atomic(ws / SESSION_NAME, session)
     (ws / AGENTS_MD_NAME).write_text(DEFAULT_AGENTS_MD, encoding="utf-8")
+    _prepare_run_context(
+        ws,
+        "No human task yet. Wait for the next manual or scheduled instruction and then follow HUMAN.md first.",
+        source="system",
+    )
     if old_slug and old_slug != slug:
         old_dir = _chats_dir() / old_slug
         if old_dir.is_dir():
@@ -874,7 +1137,7 @@ def api_preview_cmd(body: PreviewCmdBody):
         raise HTTPException(400, "chat_id is empty")
 
     try:
-        tail = _cli_trailing_argv_preview(ws, body.message or "")
+        tail = [] if _cli_prefix_uses_template(body.cli_prefix) else _cli_trailing_argv_preview(ws, body.message or "")
         args = _build_agent_argv(body.cli_prefix, cid, ws, tail)
         preview = _argv_to_preview(args)
     except ValueError as e:
@@ -942,6 +1205,68 @@ def api_open_workspace(body: OpenWorkspaceBody):
     return {"ok": True}
 
 
+@app.post("/api/open-assets")
+def api_open_assets(body: OpenWorkspaceBody):
+    slug = (body.slug or "").strip()
+    try:
+        ws = _workspace_for_slug(slug)
+    except ValueError:
+        raise HTTPException(400, "invalid slug") from None
+    if not ws.is_dir() or not (ws / SESSION_NAME).is_file():
+        raise HTTPException(400, f"unknown session slug: {slug}")
+    assets = _cursor_assets_dir(ws)
+    path = str(assets.resolve())
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path], close_fds=True)
+        else:
+            subprocess.Popen(["xdg-open", path], close_fds=True)
+    except OSError as e:
+        raise HTTPException(500, f"could not open assets folder: {e}") from e
+    return {"ok": True}
+
+
+@app.post("/api/inbox-upload")
+def api_inbox_upload(body: InboxUploadBody):
+    slug = (body.slug or "").strip()
+    try:
+        ws = _workspace_for_slug(slug)
+    except ValueError:
+        raise HTTPException(400, "invalid slug") from None
+    if not ws.is_dir() or not (ws / SESSION_NAME).is_file():
+        raise HTTPException(400, f"unknown session slug: {slug}")
+
+    b64 = (body.data_base64 or "").strip()
+    if not b64:
+        raise HTTPException(400, "data_base64 is empty")
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception:
+        raise HTTPException(400, "data_base64 is invalid") from None
+    if not raw:
+        raise HTTPException(400, "uploaded file is empty")
+
+    prefix = _attachment_prefix_for_content_type(body.content_type, body.filename)
+    token = _next_attachment_token(ws, prefix)
+    suffix = _attachment_suffix_for_upload(body.content_type, body.filename)
+    assets = _cursor_assets_dir(ws)
+    path = assets / f"{token}{suffix}"
+    try:
+        path.write_bytes(raw)
+    except OSError as e:
+        raise HTTPException(500, f"could not save attachment: {e}") from e
+
+    return {
+        "ok": True,
+        "token": token,
+        "reference": f"@{token}",
+        "filename": path.name,
+        "absolute_path": str(path),
+    }
+
+
 @app.post("/api/delete-session")
 def api_delete_session(body: DeleteSessionBody):
     slug = (body.slug or "").strip()
@@ -973,7 +1298,12 @@ def api_chat(req: ChatRequest):
     if not msg:
         raise HTTPException(400, "message is empty")
 
-    tail = _cli_trailing_argv_chat(ws, msg)
+    try:
+        _prepare_run_context(ws, msg, source="manual")
+    except (OSError, RuntimeError) as e:
+        raise HTTPException(500, f"could not prepare HUMAN.md or ATTACHMENTS.md: {e}") from e
+
+    tail = [] if _cli_prefix_uses_template(req.cli_prefix) else _cli_trailing_argv_chat(ws, msg)
     try:
         args = _build_agent_argv(req.cli_prefix, req.chat_id, ws, tail)
         preview = _argv_to_preview(args)

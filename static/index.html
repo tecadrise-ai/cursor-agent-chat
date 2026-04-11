@@ -304,7 +304,7 @@
     .preview-actions {
       display: flex;
       justify-content: flex-end;
-      align-items: center;
+      align-items: flex-end;
       gap: 6px;
       margin-top: 20px;
     }
@@ -686,11 +686,16 @@
     }
     .sched-controls {
       display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      margin-right: auto;
+      min-width: 0;
+    }
+    .sched-controls-row {
+      display: flex;
       align-items: center;
       gap: 8px;
-      margin-right: auto;
-      flex-wrap: wrap;
-      min-width: 0;
     }
     .sched-next-run {
       font-size: 0.7rem;
@@ -908,19 +913,21 @@
               <div class="preview" id="cmdPreview" role="status" aria-live="polite"></div>
               <div class="preview-actions">
                 <div class="sched-controls">
-                  <div class="sched-toggle-host" title="Scheduler on / off for this tab">
-                    <input type="checkbox" id="schedEnabledToggle" class="sched-toggle-input" disabled aria-label="Enable scheduler for this chat tab" />
-                    <label for="schedEnabledToggle" class="sched-toggle-label"></label>
-                  </div>
-                  <button type="button" class="secondary icon-btn preview-icon-accent" id="btnSchedule" disabled aria-label="Edit schedule" title="Edit schedule">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <rect width="18" height="18" x="3" y="4" rx="2" ry="2"/>
-                      <line x1="16" x2="16" y1="2" y2="6"/>
-                      <line x1="8" x2="8" y1="2" y2="6"/>
-                      <line x1="3" x2="21" y1="10" y2="10"/>
-                    </svg>
-                  </button>
                   <span class="sched-next-run" id="schedNextRunDisplay" hidden></span>
+                  <div class="sched-controls-row">
+                    <div class="sched-toggle-host" title="Scheduler on / off for this tab">
+                      <input type="checkbox" id="schedEnabledToggle" class="sched-toggle-input" disabled aria-label="Enable scheduler for this chat tab" />
+                      <label for="schedEnabledToggle" class="sched-toggle-label"></label>
+                    </div>
+                    <button type="button" class="secondary icon-btn preview-icon-accent" id="btnSchedule" disabled aria-label="Edit schedule" title="Edit schedule">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect width="18" height="18" x="3" y="4" rx="2" ry="2"/>
+                        <line x1="16" x2="16" y1="2" y2="6"/>
+                        <line x1="8" x2="8" y1="2" y2="6"/>
+                        <line x1="3" x2="21" y1="10" y2="10"/>
+                      </svg>
+                    </button>
+                  </div>
                 </div>
                 <button type="button" class="secondary icon-btn preview-icon-accent" id="btnAgentsMd" disabled aria-label="Edit AGENTS.md" title="AGENTS.md in this chat folder">
                   <img src="/static/favicon.svg" width="22" height="22" alt="" />

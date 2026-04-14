@@ -243,6 +243,26 @@
       box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.14);
       flex: 0 0 auto;
     }
+    .tab-scheduled-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #84cc16;
+      box-shadow: 0 0 0 2px rgba(132, 204, 22, 0.28);
+      flex: 0 0 auto;
+      animation: tab-sched-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes tab-sched-pulse {
+      0%,
+      100% {
+        opacity: 1;
+        box-shadow: 0 0 0 2px rgba(132, 204, 22, 0.28);
+      }
+      50% {
+        opacity: 0.85;
+        box-shadow: 0 0 0 3px rgba(132, 204, 22, 0.45);
+      }
+    }
     .tab-title { overflow: hidden; text-overflow: ellipsis; }
     .toolbar {
       padding: 12px 14px 16px;
@@ -1588,6 +1608,10 @@
       return !!(tab && (tab.manualAgentBusy || (tab.slug && tab.schedulerAgentBusy)));
     }
 
+    function isTabScheduled(tab) {
+      return !!(tab && tab.slug && tab.schedulerEnabled);
+    }
+
     function snapshotFieldsToTab(tab) {
       tab.cliPrefix = normalizeCliPrefixValue(el("cliPrefix").value);
       tab.cmdPreview = el("cmdPreview").textContent || "\u2014";
@@ -1887,6 +1911,12 @@
           (isTabBusy(tab) ? " busy" : "");
         wrap.setAttribute("role", "tab");
         wrap.setAttribute("aria-selected", tab.id === state.activeTabId ? "true" : "false");
+        if (isTabScheduled(tab)) {
+          const sdot = document.createElement("span");
+          sdot.className = "tab-scheduled-dot";
+          sdot.title = "Scheduler active for this tab";
+          wrap.appendChild(sdot);
+        }
         if (isTabBusy(tab)) {
           const dot = document.createElement("span");
           dot.className = "tab-running-dot";

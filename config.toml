@@ -21,8 +21,8 @@ human_md_file = "HUMAN.md"
 attachments_md_file = "ATTACHMENTS.md"
 
 [defaults]
-cli_prefix = "agent -p --trust --yolo --approve-mcps --model auto --resume \"{chat_id}\" --workspace \"{workspace}\" \"Read AGENTS.md and HUMAN.md first. Follow HUMAN.md first as the current task. See ATTACHMENTS.md for referenced files. \""
-agents_md_default = "Read HUMAN.md first and treat it as the current task. Use AGENTS.md only as standing rules and background."
+cli_prefix = "agent -p --trust --yolo --approve-mcps --model auto --workspace \"{workspace}\" \"Read AGENTS.md and HUMAN.md first. Follow HUMAN.md first as the current task. See ATTACHMENTS.md for referenced files. \""
+agents_md_default = "Read HUMAN.md first and treat it as the current task. Use AGENTS.md only as standing rules and background. MCP tools: In cursor-agent print mode (-p), MCP tools may be hidden at top level. Before any MCP action, call Task and use MCP tools inside Task only. If top-level call says \"Tool not found\", retry once inside Task. If Task also lacks the needed mcp_* tool, stop and report blocker with the exact missing tool name."
 schedule = "interval:15m"
 
 [agent]

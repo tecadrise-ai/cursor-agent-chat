@@ -1,5 +1,5 @@
 """
-Standalone test server: Cursor CLI chat with --resume session id.
+Standalone test server: Cursor CLI chat per workspace; optional --resume via cli_prefix template.
 Each named session uses ./chats/<slug>/ as workspace; session.json + _app_state.json persist UI.
 """
 
@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import sys
 import shutil
+import signal
 import threading
 import time
 import uuid
@@ -24,7 +25,7 @@ from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -407,6 +408,10 @@ def _iter_app_state_paths() -> list[Path]:
 scheduler = BackgroundScheduler()
 _scheduler_slug_lock = threading.Lock()
 _scheduler_running_slugs: set[str] = set()
+
+# Manual /api/chat runs one subprocess per slug; poll GET /api/chat/status until done; POST /api/chat/stop kills the tree.
+_manual_agent_lock = threading.Lock()
+_manual_agent_state: dict[str, dict] = {}
 # (enabled, schedule_lower) last applied per slug — avoid remove+re-add on every persist (resets interval next_run).
 _chat_sched_sig: dict[str, tuple[bool, str]] = {}
 
@@ -836,6 +841,98 @@ def _run_agent(argv: list[str], *, cwd: str | None, timeout: int) -> subprocess.
     )
 
 
+def _terminate_process_tree(pid: int) -> None:
+    if pid <= 0:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=45,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _popen_agent(argv: list[str], *, cwd: str | None) -> subprocess.Popen[str]:
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    popen_kw: dict = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "cwd": cwd,
+        "env": env,
+    }
+    if sys.platform == "win32" and argv:
+        exe = shutil.which(argv[0]) or argv[0]
+        resolved = [exe, *argv[1:]]
+        lower = str(exe).lower()
+        if lower.endswith(".cmd") or lower.endswith(".bat"):
+            line = subprocess.list2cmdline(resolved)
+            return subprocess.Popen(
+                ["cmd.exe", "/d", "/s", "/c", line],
+                **popen_kw,
+            )
+        argv = resolved
+    return subprocess.Popen(argv, **popen_kw)
+
+
+def _manual_agent_worker(slug: str, args: list[str], cwd: str, preview: str) -> None:
+    proc: subprocess.Popen[str] | None = None
+    rc = -1
+    out = ""
+    err = ""
+    killed = False
+    try:
+        proc = _popen_agent(args, cwd=cwd)
+        with _manual_agent_lock:
+            st = _manual_agent_state.get(slug)
+            if not st:
+                _terminate_process_tree(proc.pid)
+                _manual_agent_state.pop(slug, None)
+                return
+            st["proc"] = proc
+        try:
+            out, err = proc.communicate(timeout=TIMEOUT_AGENT_S)
+            rc = proc.returncode if proc.returncode is not None else 0
+        except subprocess.TimeoutExpired:
+            _terminate_process_tree(proc.pid)
+            try:
+                out, err = proc.communicate(timeout=30)
+            except Exception:
+                out, err = "", ""
+            rc = proc.returncode if proc.returncode is not None else -1
+            killed = True
+    except Exception as e:
+        rc = -1
+        err = str(e)
+    finally:
+        with _manual_agent_lock:
+            st = _manual_agent_state.get(slug)
+            if st:
+                st["proc"] = None
+                if st.get("user_stopped"):
+                    killed = True
+                st["result"] = {
+                    "returncode": rc,
+                    "stdout": (out or "").strip(),
+                    "stderr": (err or "").strip(),
+                    "preview_cmd": preview,
+                    "killed": killed,
+                }
+
+
 def _new_chat_id() -> str:
     r = _run_agent(CREATE_CHAT_ARGV, cwd=None, timeout=TIMEOUT_CREATE_CHAT_S)
     if r.returncode != 0:
@@ -867,7 +964,9 @@ def _scan_disk_tabs() -> list[dict]:
                 "slug": slug,
                 "title": data.get("title") or slug,
                 "chatId": data.get("chat_id") or "",
+                "createdAt": data.get("created_at") or "",
                 "cliPrefix": data.get("cli_prefix") or DEFAULT_CLI,
+                "inputDraft": data.get("input_draft") or "",
                 "cmdPreview": data.get("cmd_preview") or "\u2014",
                 "messages": data.get("messages") or [],
                 "schedulerEnabled": bool(data.get("scheduler_enabled")),
@@ -904,7 +1003,9 @@ class TabState(BaseModel):
     slug: str | None = None
     title: str = ""
     chatId: str = ""
+    createdAt: str = ""
     cliPrefix: str = DEFAULT_CLI
+    inputDraft: str = ""
     cmdPreview: str = "\u2014"
     messages: list[dict] = Field(default_factory=list)
     schedulerEnabled: bool = False
@@ -930,6 +1031,10 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class StopAgentBody(BaseModel):
+    slug: str
+
+
 class PreviewCmdBody(BaseModel):
     cli_prefix: str = Field(default=DEFAULT_CLI)
     chat_id: str
@@ -939,6 +1044,10 @@ class PreviewCmdBody(BaseModel):
 
 class AgentsMdBody(BaseModel):
     slug: str
+    content: str = ""
+
+
+class McpConfigBody(BaseModel):
     content: str = ""
 
 
@@ -954,6 +1063,10 @@ class InboxUploadBody(BaseModel):
 
 
 class DeleteSessionBody(BaseModel):
+    slug: str
+
+
+class NewChatIdBody(BaseModel):
     slug: str
 
 
@@ -987,13 +1100,29 @@ def api_get_state(client_id: str = ""):
             if slug:
                 if not (CHATS / str(slug)).is_dir():
                     continue
+            disk_chat_id = ""
+            created_at = t.get("createdAt") or ""
+            if not created_at and slug:
+                disk = _read_json(CHATS / str(slug) / SESSION_NAME) or {}
+                if isinstance(disk, dict):
+                    disk_chat_id = disk.get("chat_id") or ""
+                    created_at = disk.get("created_at") or ""
+            elif slug:
+                disk = _read_json(CHATS / str(slug) / SESSION_NAME) or {}
+                if isinstance(disk, dict):
+                    disk_chat_id = disk.get("chat_id") or ""
+                    # Prefer disk timestamp when available so UI reflects latest
+                    # chat_id rotation time for this specific tab.
+                    created_at = disk.get("created_at") or created_at
             tabs.append(
                 {
                     "id": t.get("id") or "",
                     "slug": slug,
                     "title": t.get("title") or "",
-                    "chatId": t.get("chatId") or "",
+                    "chatId": disk_chat_id or t.get("chatId") or "",
+                    "createdAt": created_at,
                     "cliPrefix": t.get("cliPrefix") or DEFAULT_CLI,
+                    "inputDraft": t.get("inputDraft") if isinstance(t.get("inputDraft"), str) else "",
                     "cmdPreview": t.get("cmdPreview") if t.get("cmdPreview") else "\u2014",
                     "messages": t.get("messages") if isinstance(t.get("messages"), list) else [],
                     "schedulerEnabled": bool(t.get("schedulerEnabled")),
@@ -1034,12 +1163,16 @@ def api_persist(body: PersistBody):
                 slug = str(tab.slug)
                 pdir = root / slug
                 pdir.mkdir(parents=True, exist_ok=True)
+                prev = _read_json(pdir / SESSION_NAME) or {}
+                prev_created_at = prev.get("created_at") if isinstance(prev, dict) else ""
                 session = {
                     "slug": slug,
                     "tab_id": tab.id,
                     "title": tab.title,
                     "chat_id": tab.chatId,
+                    "created_at": tab.createdAt or prev_created_at or now,
                     "cli_prefix": tab.cliPrefix,
+                    "input_draft": tab.inputDraft or "",
                     "cmd_preview": tab.cmdPreview,
                     "messages": tab.messages,
                     "updated_at": now,
@@ -1088,15 +1221,18 @@ def api_new_chat(body: NewChatBody):
         raise HTTPException(status_code=500, detail=(str(e) or repr(e) or "new-chat failed")) from e
     tab_id = "tab_" + uuid.uuid4().hex[:16]
     title = body.session_name.strip() or slug
+    created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     session = {
         "slug": slug,
         "tab_id": tab_id,
         "title": title,
         "chat_id": chat_id,
+        "created_at": created_at,
         "cli_prefix": DEFAULT_CLI,
+        "input_draft": "",
         "cmd_preview": "\u2014",
         "messages": [],
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "updated_at": created_at,
         "scheduler_enabled": False,
         "schedule": DEFAULT_SCHEDULE,
         "scheduler_prompt": "",
@@ -1114,12 +1250,41 @@ def api_new_chat(body: NewChatBody):
             shutil.rmtree(old_dir, ignore_errors=True)
     return {
         "chat_id": chat_id,
+        "created_at": created_at,
         "slug": slug,
         "tab_id": tab_id,
         "title": title,
         "workspace_abs": str(ws.resolve()),
         "workspace_display": f"chats/{slug}",
     }
+
+
+@app.post("/api/new-chat-id")
+def api_new_chat_id(body: NewChatIdBody):
+    slug = (body.slug or "").strip()
+    try:
+        ws = _workspace_for_slug(slug)
+    except ValueError:
+        raise HTTPException(400, "invalid slug") from None
+    if not ws.is_dir() or not (ws / SESSION_NAME).is_file():
+        raise HTTPException(400, f"unknown session slug: {slug}")
+
+    sess = _read_json(ws / SESSION_NAME) or {}
+    if not isinstance(sess, dict):
+        raise HTTPException(500, "invalid session data")
+
+    try:
+        chat_id = _new_chat_id()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=(str(e) or repr(e) or "new-chat-id failed")) from e
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    sess["chat_id"] = chat_id
+    # Rotate display timestamp together with new chat_id.
+    sess["created_at"] = now
+    sess["updated_at"] = now
+    _write_json_atomic(ws / SESSION_NAME, sess)
+    return {"chat_id": chat_id, "created_at": sess.get("created_at") or ""}
 
 
 @app.post("/api/preview-cmd")
@@ -1181,6 +1346,43 @@ def api_post_agents_md(body: AgentsMdBody):
     except OSError as e:
         raise HTTPException(500, f"could not write AGENTS.md: {e}") from e
     return {"ok": True}
+
+
+def _mcp_config_path() -> Path:
+    # Project-level MCP config used by cursor-agent when chats/<slug>/ workspaces
+    # walk up to the nearest .cursor/mcp.json. This is the "internal" config.
+    return ROOT / ".cursor" / "mcp.json"
+
+
+@app.get("/api/mcp-config")
+def api_get_mcp_config():
+    path = _mcp_config_path()
+    if path.is_file():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise HTTPException(500, f"could not read mcp.json: {e}") from e
+    else:
+        text = '{\n  "mcpServers": {}\n}\n'
+    return {"content": text, "path": str(path)}
+
+
+@app.post("/api/mcp-config")
+def api_post_mcp_config(body: McpConfigBody):
+    text = body.content or ""
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"invalid JSON: {e.msg} (line {e.lineno}, col {e.colno})") from e
+    if not isinstance(parsed, dict):
+        raise HTTPException(400, "mcp.json must be a JSON object at the top level")
+    path = _mcp_config_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(500, f"could not write mcp.json: {e}") from e
+    return {"ok": True, "path": str(path)}
 
 
 @app.post("/api/open-workspace")
@@ -1310,19 +1512,64 @@ def api_chat(req: ChatRequest):
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
-    try:
-        r = _run_agent(args, cwd=str(ws), timeout=TIMEOUT_AGENT_S)
-    except subprocess.TimeoutExpired:
-        raise HTTPException(504, f"agent timed out ({TIMEOUT_AGENT_S}s)") from None
+    with _manual_agent_lock:
+        exist = _manual_agent_state.get(slug)
+        if exist and exist.get("proc") is not None and exist["proc"].poll() is None:
+            raise HTTPException(409, "agent already running for this session") from None
+        if exist and exist.get("result") is not None:
+            _manual_agent_state.pop(slug, None)
+        _manual_agent_state[slug] = {
+            "proc": None,
+            "result": None,
+            "preview": preview,
+            "user_stopped": False,
+        }
+    threading.Thread(
+        target=_manual_agent_worker,
+        args=(slug, args, str(ws), preview),
+        daemon=True,
+    ).start()
+    return {"pending": True, "slug": slug, "preview_cmd": preview}
 
-    out = (r.stdout or "").strip()
-    err = (r.stderr or "").strip()
-    return {
-        "returncode": r.returncode,
-        "stdout": out,
-        "stderr": err,
-        "preview_cmd": preview,
-    }
+
+@app.get("/api/chat/status")
+def api_chat_status(slug: str = Query(..., min_length=1)):
+    slug = slug.strip()
+    try:
+        _workspace_for_slug(slug)
+    except ValueError:
+        raise HTTPException(400, "invalid slug") from None
+    with _manual_agent_lock:
+        st = _manual_agent_state.get(slug)
+        if not st:
+            raise HTTPException(404, "no active manual run for this session") from None
+        if st.get("result") is not None:
+            res = dict(st["result"])
+            _manual_agent_state.pop(slug, None)
+            return {"running": False, **res}
+        p = st.get("proc")
+        if p is not None and p.poll() is None:
+            return {"running": True, "preview_cmd": st.get("preview", "")}
+        return {"running": True, "preview_cmd": st.get("preview", "")}
+
+
+@app.post("/api/chat/stop")
+def api_chat_stop(body: StopAgentBody):
+    slug = (body.slug or "").strip()
+    try:
+        _workspace_for_slug(slug)
+    except ValueError:
+        raise HTTPException(400, "invalid slug") from None
+    with _manual_agent_lock:
+        st = _manual_agent_state.get(slug)
+        if not st:
+            return {"ok": True, "stopped": False}
+        st["user_stopped"] = True
+        p = st.get("proc")
+        if p is not None and p.poll() is None:
+            _terminate_process_tree(p.pid)
+            return {"ok": True, "stopped": True}
+    return {"ok": True, "stopped": False}
 
 
 if __name__ == "__main__":

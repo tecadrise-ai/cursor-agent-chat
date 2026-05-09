@@ -3,6 +3,10 @@
     "playwright": {
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "browser-harness": {
+      "command": "uv",
+      "args": ["run", "--directory", "C:\\TecAdRise\\tools\\browser-harness", "python", "mcp_server.py"]
     }
   }
 }

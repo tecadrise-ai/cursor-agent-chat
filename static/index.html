@@ -170,6 +170,13 @@
       opacity: 0.5;
       cursor: not-allowed;
     }
+    .composer #btnSend.btn-stop {
+      background: #dc2626;
+      box-shadow: 0 1px 2px rgba(220, 38, 38, 0.25);
+    }
+    .composer #btnSend.btn-stop:hover:not(:disabled) {
+      background: #b91c1c;
+    }
     button.secondary {
       background: var(--white);
       border: 1px solid var(--gray-200);
@@ -205,6 +212,13 @@
       flex-shrink: 0;
       overflow-x: auto;
       overflow-y: hidden;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .tab-bar::-webkit-scrollbar {
+      display: none;
+      height: 0;
+      width: 0;
     }
     .tab {
       display: inline-flex;
@@ -221,8 +235,18 @@
       cursor: pointer;
       white-space: nowrap;
       max-width: 180px;
+      outline: none;
     }
     .tab:hover { background: var(--gray-50); }
+    .tab.dragging {
+      opacity: 0.45;
+    }
+    .tab.drag-over-before {
+      box-shadow: -3px 0 0 var(--brand-500), 0 -2px 0 var(--brand-600) inset;
+    }
+    .tab.drag-over-after {
+      box-shadow: 3px 0 0 var(--brand-500), 0 -2px 0 var(--brand-600) inset;
+    }
     .tab.active {
       background: var(--white);
       color: var(--brand-600);
@@ -232,8 +256,13 @@
       padding-bottom: 9px;
       box-shadow: 0 -2px 0 var(--brand-600) inset;
     }
-    .tab.busy {
+    /* Busy accent on tab border only when this tab is selected (avoid extra rim on background tabs) */
+    .tab.active.busy {
       border-color: var(--brand-300);
+    }
+    .tab:focus-visible {
+      outline: 2px solid var(--brand-500);
+      outline-offset: 2px;
     }
     .tab-running-dot {
       width: 8px;
@@ -882,6 +911,7 @@
           </div>
         </div>
         <div class="row">
+          <button type="button" class="secondary" id="btnMcpConfig" title="Edit .cursor/mcp.json for this project">MCP Config</button>
           <button type="button" id="btnNewChat">+ New chat</button>
         </div>
       </div>
@@ -917,6 +947,7 @@
               <div class="row" style="width:100%;">
                 <span class="chat-id" id="chatIdDisplay" style="flex:1;min-width:0;word-break:break-all;">(none — + New chat in this tab)</span>
                 <button type="button" class="secondary" id="btnCopyId" disabled>Copy id</button>
+                <button type="button" class="secondary" id="btnNewId" disabled>New</button>
               </div>
             </div>
             <div>
@@ -999,6 +1030,17 @@
         </div>
       </div>
     </div>
+    <div class="agents-md-overlay" id="mcpConfigOverlay" hidden>
+      <div class="agents-md-dialog" role="dialog" aria-labelledby="mcpConfigTitle" aria-modal="true">
+        <h3 id="mcpConfigTitle">MCP Config (.cursor/mcp.json)</h3>
+        <p class="agents-md-hint">Project-level MCP server config at <code id="mcpConfigPathDisplay">.cursor/mcp.json</code>. The cursor-agent CLI uses the nearest <code>.cursor/mcp.json</code> walking up from each chat workspace, and does not merge with parent configs. After saving, restart any running <code>cursor-agent</code> sessions to reload MCP servers.</p>
+        <textarea id="mcpConfigEditor" spellcheck="false" aria-label="mcp.json content"></textarea>
+        <div class="name-session-actions">
+          <button type="button" class="secondary" id="mcpConfigCancel">Cancel</button>
+          <button type="button" id="mcpConfigSave">Save</button>
+        </div>
+      </div>
+    </div>
     <div class="schedule-overlay" id="scheduleOverlay" hidden>
       <div class="schedule-dialog" role="dialog" aria-labelledby="scheduleDialogTitle" aria-modal="true">
         <h3 id="scheduleDialogTitle">Edit schedule</h3>
@@ -1077,11 +1119,30 @@
     const status = el("status");
     const tabBar = el("tabBar");
 
+    tabBar.addEventListener(
+      "wheel",
+      (ev) => {
+        if (tabBar.scrollWidth <= tabBar.clientWidth) return;
+        if (ev.deltaX !== 0) {
+          tabBar.scrollLeft += ev.deltaX;
+          ev.preventDefault();
+          return;
+        }
+        if (ev.deltaY !== 0) {
+          tabBar.scrollLeft += ev.deltaY;
+          ev.preventDefault();
+        }
+      },
+      { passive: false },
+    );
+
     const state = { activeTabId: "", tabs: [] };
 
     let previewDebounce = null;
     let previewGen = 0;
     let schedulerPollTimer = null;
+    let draggedTabId = "";
+    let suppressNextTabClick = false;
 
     function getClientId() {
       let id = sessionStorage.getItem(CLIENT_ID_KEY);
@@ -1100,8 +1161,11 @@
 
     function cliTemplateTail() {
       if (!DEFAULT_PREFIX) return "";
-      const marker = ' --resume "{chat_id}" --workspace "{workspace}"';
-      const idx = DEFAULT_PREFIX.indexOf(marker);
+      const withResume = ' --resume "{chat_id}" --workspace "{workspace}"';
+      let idx = DEFAULT_PREFIX.indexOf(withResume);
+      if (idx >= 0) return DEFAULT_PREFIX.slice(idx);
+      const wsOnly = ' --workspace "{workspace}"';
+      idx = DEFAULT_PREFIX.indexOf(wsOnly);
       return idx >= 0 ? DEFAULT_PREFIX.slice(idx) : "";
     }
 
@@ -1119,6 +1183,28 @@
       return normalizeCliPrefixValue(prefix)
         .replaceAll("{chat_id}", chatId || "—")
         .replaceAll("{workspace}", workspace || "—");
+    }
+
+    function formatChatCreatedSuffix(createdAt) {
+      if (!createdAt) return "";
+      const ms = Date.parse(String(createdAt));
+      if (!Number.isFinite(ms)) return "";
+      const d = new Date(ms);
+      const pad = (n) => String(n).padStart(2, "0");
+      return (
+        String(d.getFullYear()) +
+        pad(d.getMonth() + 1) +
+        pad(d.getDate()) +
+        "_" +
+        pad(d.getHours()) +
+        pad(d.getMinutes())
+      );
+    }
+
+    function renderChatIdDisplayValue(chatId, createdAt) {
+      if (!chatId) return "(none — + New chat in this tab)";
+      const suffix = formatChatCreatedSuffix(createdAt);
+      return suffix ? `${chatId}@${suffix}` : chatId;
     }
 
     /** Close only when press+release both hit the backdrop (avoids closing after text select that ends on backdrop). */
@@ -1241,6 +1327,53 @@
       }
     }
 
+    function closeMcpConfigOverlay() {
+      const ov = el("mcpConfigOverlay");
+      if (ov.hidden) return;
+      ov.hidden = true;
+      document.removeEventListener("keydown", mcpConfigOnEscape);
+    }
+
+    function mcpConfigOnEscape(ev) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        closeMcpConfigOverlay();
+      }
+    }
+
+    async function openMcpConfigOverlay() {
+      closeMcpConfigOverlay();
+      try {
+        const data = await apiGet("/api/mcp-config");
+        el("mcpConfigEditor").value =
+          data.content != null ? String(data.content) : "";
+        if (data.path) {
+          el("mcpConfigPathDisplay").textContent = String(data.path);
+        }
+      } catch (e) {
+        status.textContent = "Could not load mcp.json: " + e.message;
+        return;
+      }
+      el("mcpConfigOverlay").hidden = false;
+      document.addEventListener("keydown", mcpConfigOnEscape);
+      requestAnimationFrame(() => el("mcpConfigEditor").focus());
+    }
+
+    async function saveMcpConfig() {
+      try {
+        await apiPost("/api/mcp-config", {
+          content: el("mcpConfigEditor").value,
+        });
+        closeMcpConfigOverlay();
+        status.textContent = "Saved mcp.json. Restart cursor-agent sessions to reload.";
+        setTimeout(() => {
+          if (status.textContent.startsWith("Saved mcp.json")) status.textContent = "";
+        }, 4000);
+      } catch (e) {
+        status.textContent = "Save failed: " + e.message;
+      }
+    }
+
     function uid() {
       return "draft_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
     }
@@ -1251,6 +1384,8 @@
         slug: null,
         title: title || "Chat",
         chatId: "",
+        createdAt: "",
+        inputDraft: "",
         cliPrefix: normalizeCliPrefixValue(inherit && inherit.cliPrefix ? inherit.cliPrefix : DEFAULT_PREFIX),
         cmdPreview: "\u2014",
         messages: [],
@@ -1269,6 +1404,8 @@
         slug: t.slug || null,
         title: t.title || "Chat",
         chatId: t.chatId || "",
+        createdAt: t.createdAt || "",
+        inputDraft: t.inputDraft != null ? String(t.inputDraft) : "",
         cliPrefix: normalizeCliPrefixValue(t.cliPrefix || DEFAULT_PREFIX),
         cmdPreview: t.cmdPreview != null && t.cmdPreview !== "" ? t.cmdPreview : "\u2014",
         messages: Array.isArray(t.messages) ? t.messages : [],
@@ -1456,6 +1593,21 @@
       return data;
     }
 
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function pollChatUntilDone(slug) {
+      const path = "/api/chat/status?slug=" + encodeURIComponent(slug);
+      for (;;) {
+        const s = await apiGet(path);
+        if (!s.running) {
+          return s;
+        }
+        await sleep(400);
+      }
+    }
+
     async function apiPost(path, body) {
       if (path === "/api/persist") {
         body = { client_id: getClientId(), ...body };
@@ -1614,6 +1766,7 @@
 
     function snapshotFieldsToTab(tab) {
       tab.cliPrefix = normalizeCliPrefixValue(el("cliPrefix").value);
+      tab.inputDraft = el("input").value || "";
       tab.cmdPreview = el("cmdPreview").textContent || "\u2014";
       tab.schedulerEnabled = el("schedEnabledToggle").checked;
       tab.schedulerPrompt = el("schedulerPrompt").value;
@@ -1649,8 +1802,10 @@
 
     async function applyTabToFields(tab) {
       el("chatIdDisplay").dataset.raw = tab.chatId || "";
-      el("chatIdDisplay").textContent = tab.chatId || "(none — + New chat in this tab)";
+      el("chatIdDisplay").textContent = renderChatIdDisplayValue(tab.chatId || "", tab.createdAt || "");
+      el("input").value = tab.inputDraft || "";
       el("btnCopyId").disabled = !tab.chatId;
+      el("btnNewId").disabled = !tab.slug;
       el("schedEnabledToggle").disabled = !tab.slug;
       el("btnSchedule").disabled = !tab.slug;
       el("schedulerPrompt").disabled = !tab.slug;
@@ -1674,7 +1829,10 @@
     function applyGlobalBusyUi() {
       const tab = ensureActiveTab();
       const b = isTabBusy(tab);
-      el("btnSend").disabled = b;
+      const sendBtn = el("btnSend");
+      sendBtn.disabled = false;
+      sendBtn.textContent = b ? "Stop" : "Send";
+      sendBtn.classList.toggle("btn-stop", b);
       el("btnNewChat").disabled = b;
       el("schedEnabledToggle").disabled = b || !tab.slug;
       el("btnSchedule").disabled = b || !tab.slug;
@@ -1683,6 +1841,7 @@
       el("btnOpenWorkspace").disabled = b || !tab.slug;
       el("btnOpenAssets").disabled = b || !tab.slug;
       el("btnDeleteSession").disabled = b || !tab.slug;
+      el("btnNewId").disabled = b || !tab.slug;
       el("statusSpinner").hidden = !b;
       if (b) {
         status.textContent = "Agent running\u2026";
@@ -1888,6 +2047,7 @@
         title: t.title,
         chatId: t.chatId,
         cliPrefix: t.cliPrefix,
+        inputDraft: t.inputDraft != null ? String(t.inputDraft) : "",
         cmdPreview: t.cmdPreview,
         messages: t.messages,
         schedulerEnabled: !!t.schedulerEnabled,
@@ -1911,6 +2071,48 @@
           (isTabBusy(tab) ? " busy" : "");
         wrap.setAttribute("role", "tab");
         wrap.setAttribute("aria-selected", tab.id === state.activeTabId ? "true" : "false");
+        wrap.draggable = true;
+        wrap.dataset.tabId = tab.id;
+        wrap.addEventListener("dragstart", (e) => {
+          draggedTabId = tab.id;
+          suppressNextTabClick = true;
+          wrap.classList.add("dragging");
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", tab.id);
+          }
+        });
+        wrap.addEventListener("dragover", (e) => {
+          if (!draggedTabId || draggedTabId === tab.id) return;
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          const r = wrap.getBoundingClientRect();
+          const after = e.clientX > r.left + r.width / 2;
+          wrap.classList.toggle("drag-over-before", !after);
+          wrap.classList.toggle("drag-over-after", after);
+        });
+        wrap.addEventListener("dragleave", () => {
+          wrap.classList.remove("drag-over-before", "drag-over-after");
+        });
+        wrap.addEventListener("drop", (e) => {
+          e.preventDefault();
+          const fromId =
+            (e.dataTransfer && e.dataTransfer.getData("text/plain")) || draggedTabId;
+          const r = wrap.getBoundingClientRect();
+          const after = e.clientX > r.left + r.width / 2;
+          wrap.classList.remove("drag-over-before", "drag-over-after");
+          void reorderTabs(fromId, tab.id, after);
+        });
+        wrap.addEventListener("dragend", () => {
+          draggedTabId = "";
+          wrap.classList.remove("dragging");
+          for (const x of tabBar.querySelectorAll(".drag-over-before,.drag-over-after")) {
+            x.classList.remove("drag-over-before", "drag-over-after");
+          }
+          setTimeout(() => {
+            suppressNextTabClick = false;
+          }, 0);
+        });
         if (isTabScheduled(tab)) {
           const sdot = document.createElement("span");
           sdot.className = "tab-scheduled-dot";
@@ -1940,19 +2142,39 @@
           cx.className = "tab-close";
           cx.setAttribute("aria-label", "Close tab");
           cx.textContent = "\u00d7";
+          cx.draggable = false;
           cx.addEventListener("click", (e) => {
             e.stopPropagation();
             closeTab(tab.id);
           });
           wrap.appendChild(cx);
         }
-        wrap.addEventListener("click", () => switchTab(tab.id));
+        wrap.addEventListener("click", () => {
+          if (suppressNextTabClick) return;
+          switchTab(tab.id);
+        });
         tabBar.appendChild(wrap);
       }
     }
 
+    async function reorderTabs(fromId, toId, insertAfter) {
+      if (!fromId || !toId || fromId === toId) return;
+      const fromIdx = state.tabs.findIndex((t) => t.id === fromId);
+      const toIdx = state.tabs.findIndex((t) => t.id === toId);
+      if (fromIdx < 0 || toIdx < 0) return;
+      snapshotFieldsToTab(getActiveTab());
+      const [moved] = state.tabs.splice(fromIdx, 1);
+      let insertIdx = state.tabs.findIndex((t) => t.id === toId);
+      if (insertIdx < 0) return;
+      if (insertAfter) insertIdx += 1;
+      state.tabs.splice(insertIdx, 0, moved);
+      renderTabBar();
+      await persist();
+    }
+
     async function switchTab(id) {
       closeAgentsMdOverlay();
+      closeMcpConfigOverlay();
       closeChatScheduleModal();
       snapshotFieldsToTab(getActiveTab());
       state.activeTabId = id;
@@ -1964,6 +2186,7 @@
     async function closeTab(id) {
       if (state.tabs.length <= 1) return;
       closeAgentsMdOverlay();
+      closeMcpConfigOverlay();
       closeChatScheduleModal();
       snapshotFieldsToTab(getActiveTab());
       const idx = state.tabs.findIndex((t) => t.id === id);
@@ -2178,6 +2401,7 @@
         " and ALL files inside it (AGENTS.md, session data, messages, and anything else) will be permanently removed. This cannot be undone.";
       if (!window.confirm(msg)) return;
       closeAgentsMdOverlay();
+      closeMcpConfigOverlay();
       closeChatScheduleModal();
       cancelScheduledCmdPreview();
       setTabBusy(tab.id, true);
@@ -2210,6 +2434,11 @@
     el("agentsMdSave").addEventListener("click", () => void saveAgentsMd());
     attachModalBackdropDismiss(el("agentsMdOverlay"), () => closeAgentsMdOverlay());
 
+    el("btnMcpConfig").addEventListener("click", () => void openMcpConfigOverlay());
+    el("mcpConfigCancel").addEventListener("click", () => closeMcpConfigOverlay());
+    el("mcpConfigSave").addEventListener("click", () => void saveMcpConfig());
+    attachModalBackdropDismiss(el("mcpConfigOverlay"), () => closeMcpConfigOverlay());
+
     el("cliPrefix").addEventListener("input", scheduleRefreshCmdPreview);
 
     el("cliPrefix").addEventListener("change", () => {
@@ -2227,6 +2456,41 @@
       setTimeout(() => {
         if (status.textContent === "Copied chat_id.") status.textContent = "";
       }, 2000);
+    });
+
+    el("btnNewId").addEventListener("click", async () => {
+      const tab = ensureActiveTab();
+      if (!tab.slug) {
+        status.textContent = "Create a named session first (+ New chat).";
+        setTimeout(() => {
+          if (status.textContent === "Create a named session first (+ New chat).") status.textContent = "";
+        }, 2500);
+        return;
+      }
+      if (!confirm("Generate a new chat_id for this session? The next run will continue in a fresh Cursor chat.")) {
+        return;
+      }
+
+      setTabBusy(tab.id, true);
+      try {
+        const res = await apiPost("/api/new-chat-id", { slug: tab.slug });
+        tab.chatId = (res.chat_id || "").trim();
+        tab.createdAt = res.created_at || tab.createdAt || "";
+        await applyTabToFields(tab);
+        await refreshCmdPreview();
+        renderTabBar();
+        status.textContent = "Generated new chat_id.";
+        setTimeout(() => {
+          if (status.textContent === "Generated new chat_id.") status.textContent = "";
+        }, 2500);
+      } catch (e) {
+        status.textContent = "Failed to generate chat_id.";
+        setTimeout(() => {
+          if (status.textContent === "Failed to generate chat_id.") status.textContent = "";
+        }, 3000);
+      } finally {
+        setTabBusy(tab.id, false);
+      }
     });
 
     el("btnNewChat").addEventListener("click", async () => {
@@ -2254,6 +2518,8 @@
           slug: res.slug,
           title: res.title,
           chatId: res.chat_id,
+          createdAt: res.created_at || "",
+          inputDraft: "",
           messages: [],
           cliPrefix: DEFAULT_PREFIX,
           cmdPreview: "\u2014",
@@ -2299,6 +2565,17 @@
         status.textContent = "Create a named session first (+ New chat).";
         return;
       }
+
+      if (isTabBusy(tab)) {
+        try {
+          await apiPost("/api/chat/stop", { slug: tab.slug });
+          status.textContent = "Stopping\u2026";
+        } catch (e) {
+          status.textContent = "Stop failed: " + e.message;
+        }
+        return;
+      }
+
       const chatId = tab.chatId || el("chatIdDisplay").dataset.raw;
       if (!chatId) {
         status.textContent = "Missing chat_id.";
@@ -2318,21 +2595,35 @@
       }
 
       try {
-        const data = await apiPost("/api/chat", {
+        const start = await apiPost("/api/chat", {
           cli_prefix: tab.cliPrefix || DEFAULT_PREFIX,
           chat_id: chatId,
           slug: tab.slug,
           message: text,
         });
+        if (!start.pending) {
+          throw new Error("Server did not start async agent run (missing pending).");
+        }
         const targetTab = getTabById(tabId);
         if (targetTab) {
-          targetTab.cmdPreview = data.preview_cmd || "\u2014";
+          targetTab.cmdPreview = start.preview_cmd || "\u2014";
           if (state.activeTabId === tabId) {
             el("cmdPreview").textContent = targetTab.cmdPreview;
           }
         }
+        const data = await pollChatUntilDone(tab.slug);
+        const targetTab2 = getTabById(tabId);
+        if (targetTab2) {
+          targetTab2.cmdPreview = data.preview_cmd || targetTab2.cmdPreview || "\u2014";
+          if (state.activeTabId === tabId) {
+            el("cmdPreview").textContent = targetTab2.cmdPreview;
+          }
+        }
         let body = data.stdout || "(empty stdout)";
         if (data.stderr) body += "\n\n--- stderr ---\n" + data.stderr;
+        if (data.killed) {
+          body = "**Stopped.**\n\n" + body;
+        }
         if (data.returncode !== 0) {
           await appendToTab(tabId, "agent", "exit " + data.returncode + "\n\n" + body, true);
         } else {
@@ -2342,6 +2633,9 @@
         await appendToTab(tabId, "agent", "request failed: " + e.message, true);
       } finally {
         setTabBusy(tabId, false);
+        if (status.textContent === "Stopping\u2026") {
+          status.textContent = "";
+        }
       }
     });
 
